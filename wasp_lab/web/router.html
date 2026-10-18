@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASP Network Lab - Router Mode Inspection & Injection</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <!-- Header Bar -->
+  <header>
+    <nav class="nav-center">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/network" class="nav-link">Network Controls</a>
+      <a href="/router/r0" class="nav-link active">Router Mode</a>
+    </nav>
+  </header>
+
+  <div class="container">
+
+    <!-- Router Selector & Telemetry Banner -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+            <line x1="6" y1="6" x2="6.01" y2="6"/>
+            <line x1="6" y1="18" x2="6.01" y2="18"/>
+          </svg>
+          Router Node Telemetry & Context
+        </span>
+        <div style="display:flex; align-items:center; gap:12px;">
+          <span class="badge" style="background:#1b2432; color:#fff;">TIME: <span id="simTime">0.0</span>s</span>
+          <span id="simStatus" class="badge badge-stopped">STATUS: STOPPED</span>
+          <span id="wsStatus" class="badge badge-disconnected" style="display:none;">WS: DISCONNECTED</span>
+          <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">SELECT ROUTER:</span>
+          <select class="form-select" id="routerSelector" style="width:120px;" onchange="onRouterSelect(this.value)">
+            <option value="r0" selected>Router r0</option>
+            <option value="r1">Router r1</option>
+            <option value="r2">Router r2</option>
+          </select>
+        </div>
+      </div>
+      <div class="card-body">
+        <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px;">
+          <div style="display:flex; align-items:center; gap:12px;">
+            <span class="badge badge-connected" id="rtrStatusBadge">NODE: ONLINE</span>
+            <span class="badge badge-running" id="rtrWaspBadge">WASP: ENABLED</span>
+            <span class="badge" id="rtrObsBadge" style="background:rgba(231,76,60,0.15); color:var(--color-danger); border:1px solid rgba(231,76,60,0.3);">
+              <svg width="10" height="10" style="margin-right:4px;"><polygon points="5,1 9,9 1,9" fill="#e74c3c"/></svg>
+              OBSERVATION POINT (COMPROMISED)
+            </span>
+          </div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; gap:16px;">
+            <span>Cache Hits: <strong id="rtrHits" class="text-teal">0</strong></span>
+            <span>Cache Misses: <strong id="rtrMisses" class="text-orange">0</strong></span>
+            <span>Hit Ratio: <strong id="rtrHitRatio" class="text-teal">0.0%</strong></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Section 1: Send an Interest (Traffic Injection) -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="22" y1="2" x2="11" y2="13"/>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+          </svg>
+          Send an Interest (Consumer Traffic Injection at this Router)
+        </span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">Attributed to Local Consumer</span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+          
+          <div style="flex:2; min-width:220px;">
+            <label class="form-label">Content Name Prefix</label>
+            <input type="text" class="form-input" id="injectNameInput" value="/c/1" placeholder="/c/1">
+          </div>
+
+          <div style="flex:2; min-width:220px;">
+            <label class="form-label">Catalog Quick-Select</label>
+            <select class="form-select" id="catalogSelect" onchange="onCatalogSelect(this.value)">
+              <option value="/c/1">/c/1 [WATCHLISTED - HIGH PRIVACY TARGET]</option>
+              <option value="/c/2">/c/2 [WATCHLISTED - TARGET]</option>
+              <option value="/c/3">/c/3 [WATCHLISTED - TARGET]</option>
+              <option value="/c/5">/c/5 [WATCHLISTED - TARGET]</option>
+              <option value="/c/10">/c/10 [WATCHLISTED - TARGET]</option>
+              <option value="/c/20">/c/20 [WATCHLISTED - TARGET]</option>
+              <option value="/c/50">/c/50 [NORMAL CATALOG ITEM]</option>
+              <option value="/c/100">/c/100 [NORMAL CATALOG ITEM]</option>
+              <option value="/c/500">/c/500 [NORMAL CATALOG ITEM]</option>
+            </select>
+          </div>
+
+          <div>
+            <button class="btn btn-primary" style="height:35px;" onclick="injectInterest()">[ INJECT INTEREST ]</button>
+          </div>
+
+        </div>
+
+        <!-- Injection Feedback Banner -->
+        <div id="injectionResultBanner" style="display:none; margin-top:12px; padding:10px 14px; background:var(--bg-panel); border:1px solid var(--color-primary); border-radius:4px; font-family:var(--font-mono); font-size:11px;">
+          <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+            <strong style="color:var(--color-primary);" id="injResTitle">INJECTION COMPLETED: pkt-0001</strong>
+            <span id="injResMode" class="badge badge-connected">NORMAL</span>
+          </div>
+          <div style="color:var(--text-main);">
+            Path: <span id="injResPath" class="text-teal">-</span> | 
+            Cache Result: <span id="injResCache">-</span> | 
+            RTT Latency: <span id="injResLatency" class="text-warning">-</span>
+          </div>
+          <div style="color:var(--text-muted); font-size:10px; margin-top:2px;">
+            WASP Decision: <span id="injResDec">-</span> | 
+            Attacker Observation: <span id="injResObs">-</span>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Section 2: Router State Inspection Tables (PIT, CS, FIB) -->
+    <div class="grid-3col">
+      
+      <!-- PIT Table -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Pending Interest Table (PIT)</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);" id="pitCount">0 Entries</span>
+        </div>
+        <div class="table-container" style="max-height:240px;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>PREFIX</th>
+                <th>IN-FACE</th>
+                <th>EXPIRY</th>
+              </tr>
+            </thead>
+            <tbody id="pitTableBody">
+              <tr><td colspan="3" class="text-center" style="color:var(--text-muted);">No pending entries</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- CS Table -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Content Store (CS)</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);" id="csCount">0 Cached</span>
+        </div>
+        <div class="table-container" style="max-height:240px;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>PREFIX</th>
+                <th>HITS</th>
+                <th>STATUS</th>
+              </tr>
+            </thead>
+            <tbody id="csTableBody">
+              <tr><td colspan="3" class="text-center" style="color:var(--text-muted);">Content store empty</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- FIB Table -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Forwarding Info Base (FIB)</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);" id="fibCount">1 Route</span>
+        </div>
+        <div class="table-container" style="max-height:240px;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>PREFIX</th>
+                <th>NEXT HOP</th>
+                <th>COST</th>
+              </tr>
+            </thead>
+            <tbody id="fibTableBody">
+              <tr>
+                <td>/c/*</td>
+                <td>Next Hop</td>
+                <td>1.0</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Section 3: Recent Traffic & Section 4: Attacker Observation View at this Router -->
+    <div class="grid-2col">
+      
+      <!-- Recent Traffic at this Router -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Recent Traffic Passing Through Router</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">Click to load formulas</span>
+        </div>
+        <div class="table-container" style="max-height:300px;">
+          <table class="data-table" id="routerTrafficTable">
+            <thead>
+              <tr>
+                <th>PKT ID</th>
+                <th>NAME</th>
+                <th>PES</th>
+                <th>MODE</th>
+                <th>KEY (K)</th>
+                <th>DELAY</th>
+              </tr>
+            </thead>
+            <tbody id="routerTrafficBody">
+              <tr><td colspan="6" class="text-center" style="color:var(--text-muted);">No packets recorded yet</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Attacker View at this Router -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Attacker Interception Feed at this Router</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);" id="attObsHeader">Observation Point</span>
+        </div>
+        <div class="table-container" style="max-height:300px;">
+          <div id="attObsContent" style="padding:12px;">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>TIME</th>
+                  <th>INTERCEPTED NAME</th>
+                  <th>MATCH</th>
+                  <th>CONFIDENCE</th>
+                </tr>
+              </thead>
+              <tbody id="attObsBody">
+                <tr><td colspan="4" class="text-center" style="color:var(--text-muted);">No observations yet</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Section 5: Formula Breakdown Panel for Selected Packet -->
+    <div class="card" style="margin-top: 16px;">
+      <div class="card-header">
+        <span class="card-title">Mathematical Formula Breakdown (<span id="formulaPktId" style="color:var(--color-teal);">No Packet Selected</span>)</span>
+        <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">ALGORITHM 1 EQUATIONS</span>
+      </div>
+      <div class="card-body">
+        <div class="formula-container">
+          
+          <div class="formula-stage-card">
+            <div class="formula-stage-title"><span>TRAFFIC MONITORING</span><span>Eqs. 1-6</span></div>
+            <div class="formula-item">
+              <div class="formula-label">F_c & T_c</div>
+              <div class="formula-math" id="eq_Fc">F_c(t) = \sum \delta(I_i, c)</div>
+              <div class="formula-sub" id="sub_Fc">Sub: -</div>
+              <div class="formula-val" id="val_Fc">F_c = -</div>
+            </div>
+          </div>
+
+          <div class="formula-stage-card">
+            <div class="formula-stage-title"><span>PRIVACY EXPOSURE</span><span>Eqs. 16-21</span></div>
+            <div class="formula-item">
+              <div class="formula-label">PES & Risk P_i</div>
+              <div class="formula-math" id="eq_PES">PES = \alpha F' + \beta C' + \gamma T' + \delta H'</div>
+              <div class="formula-sub" id="sub_PES">Sub: -</div>
+              <div class="formula-val" id="val_PES">PES = -</div>
+            </div>
+          </div>
+
+          <div class="formula-stage-card">
+            <div class="formula-stage-title"><span>SHIELDING CONTROL</span><span>Eqs. 22-26</span></div>
+            <div class="formula-item">
+              <div class="formula-label">Sigmoid Intensity S_i & Mode</div>
+              <div class="formula-math" id="eq_Si">S_i = \frac{1}{1 + e^{-\kappa (P_i - \tau)}}</div>
+              <div class="formula-sub" id="sub_Si">Sub: -</div>
+              <div class="formula-val" id="val_Si">S_i = -</div>
+            </div>
+          </div>
+
+          <div class="formula-stage-card">
+            <div class="formula-stage-title"><span>CRYPTO & DELAY</span><span>Eqs. 27-40</span></div>
+            <div class="formula-item">
+              <div class="formula-label">Dynamic Key K_i & Delay Delta_i</div>
+              <div class="formula-math" id="eq_Ki">K_i = K_{min} + S_i(K_{max}-K_{min})</div>
+              <div class="formula-sub" id="sub_Ki">Sub: -</div>
+              <div class="formula-val" id="val_Ki">K_i = -</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let ws = null;
+    let currentRouterId = "r0";
+    let latestState = null;
+    let selectedPacketId = null;
+
+    const pathParts = window.location.pathname.split("/");
+    if (pathParts.length >= 3 && pathParts[2]) {
+      currentRouterId = pathParts[2];
+    }
+
+    function onRouterSelect(rid) {
+      currentRouterId = rid;
+      window.history.replaceState({}, "", "/router/" + rid);
+      refreshRouterView();
+    }
+
+    function onCatalogSelect(val) {
+      document.getElementById("injectNameInput").value = val;
+    }
+
+    function connectWebSocket() {
+      const loc = window.location;
+      const wsUri = (loc.protocol === "https:" ? "wss://" : "ws://") + loc.host + "/ws";
+      ws = new WebSocket(wsUri);
+
+      ws.onopen = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-connected";
+        badge.textContent = "WS: CONNECTED";
+      };
+
+      ws.onclose = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-disconnected";
+        badge.textContent = "WS: DISCONNECTED";
+        setTimeout(connectWebSocket, 1500);
+      };
+
+      ws.onerror = function() { ws.close(); };
+
+      ws.onmessage = function(event) {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "state_update" || msg.type === "initial_state") {
+            handleStateUpdate(msg.data);
+          }
+        } catch(e) {}
+      };
+    }
+
+    function handleStateUpdate(data) {
+      latestState = data;
+
+      const simBadge = document.getElementById("simStatus");
+      simBadge.textContent = "STATUS: " + data.status;
+      if (data.status === "RUNNING") simBadge.className = "badge badge-running";
+      else if (data.status === "PAUSED") simBadge.className = "badge badge-paused";
+      else simBadge.className = "badge badge-stopped";
+
+      document.getElementById("simTime").textContent = data.sim_time.toFixed(1);
+
+      populateRouterDropdown(data.routers);
+      refreshRouterView();
+    }
+
+    function populateRouterDropdown(routers) {
+      if (!routers) return;
+      const sel = document.getElementById("routerSelector");
+      const rids = Object.keys(routers);
+      if (sel.options.length !== rids.length) {
+        sel.innerHTML = "";
+        rids.forEach(rid => {
+          const opt = document.createElement("option");
+          opt.value = rid;
+          opt.textContent = "Router " + rid;
+          if (rid === currentRouterId) opt.selected = true;
+          sel.appendChild(opt);
+        });
+      }
+    }
+
+    function refreshRouterView() {
+      if (!latestState || !latestState.routers) return;
+
+      const rtr = latestState.routers[currentRouterId];
+      if (!rtr) return;
+
+      document.getElementById("rtrHits").textContent = rtr.cache_hits;
+      document.getElementById("rtrMisses").textContent = rtr.cache_misses;
+      const total = rtr.cache_hits + rtr.cache_misses;
+      const ratio = total > 0 ? ((rtr.cache_hits / total) * 100).toFixed(1) : "0.0";
+      document.getElementById("rtrHitRatio").textContent = ratio + "%";
+
+      const waspBadge = document.getElementById("rtrWaspBadge");
+      waspBadge.textContent = rtr.wasp_enabled ? "WASP: ENABLED" : "WASP: DISABLED";
+      waspBadge.className = rtr.wasp_enabled ? "badge badge-running" : "badge badge-stopped";
+
+      const obsBadge = document.getElementById("rtrObsBadge");
+      if (rtr.is_compromised) {
+        obsBadge.style.display = "inline-flex";
+        obsBadge.innerHTML = `<svg width="10" height="10" style="margin-right:4px;"><polygon points="5,1 9,9 1,9" fill="#e74c3c"/></svg> OBSERVATION POINT (COMPROMISED)`;
+      } else {
+        obsBadge.style.display = "inline-flex";
+        obsBadge.style.background = "rgba(46,204,113,0.15)";
+        obsBadge.style.borderColor = "rgba(46,204,113,0.3)";
+        obsBadge.style.color = "var(--color-success)";
+        obsBadge.innerHTML = `<svg width="10" height="10" style="margin-right:4px;"><circle cx="5" cy="5" r="4" fill="#2ecc71"/></svg> UNCOMPROMISED NODE`;
+      }
+
+      const csBody = document.getElementById("csTableBody");
+      document.getElementById("csCount").textContent = rtr.cs.length + " Cached";
+      if (rtr.cs.length > 0) {
+        csBody.innerHTML = "";
+        rtr.cs.forEach(entry => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><strong>${entry.prefix}</strong></td>
+            <td class="text-teal">${entry.hit_count}</td>
+            <td><span class="badge badge-low">FRESH</span></td>
+          `;
+          csBody.appendChild(tr);
+        });
+      } else {
+        csBody.innerHTML = `<tr><td colspan="3" class="text-center" style="color:var(--text-muted);">Content store empty</td></tr>`;
+      }
+
+      const fibBody = document.getElementById("fibTableBody");
+      document.getElementById("fibCount").textContent = rtr.fib.length + " Routes";
+      if (rtr.fib.length > 0) {
+        fibBody.innerHTML = "";
+        rtr.fib.forEach(entry => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${entry.prefix}</td>
+            <td><strong>${entry.face}</strong></td>
+            <td>${entry.cost.toFixed(1)}</td>
+          `;
+          fibBody.appendChild(tr);
+        });
+      }
+
+      const rtrPackets = (latestState.recent_traces || []).filter(t => t.path.includes(currentRouterId));
+      renderRouterTraffic(rtrPackets);
+      renderAttackerView(rtr.is_compromised, rtrPackets);
+    }
+
+    function renderRouterTraffic(packets) {
+      const tbody = document.getElementById("routerTrafficBody");
+      if (!packets || packets.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color:var(--text-muted);">No packets traversed this hop yet</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = "";
+      packets.slice(-15).reverse().forEach(t => {
+        const tr = document.createElement("tr");
+        if (t.id === selectedPacketId) tr.className = "selected";
+
+        let modeCol = t.mode;
+        if (t.mode === "Shielded") modeCol = `<span class="text-danger">${t.mode}</span>`;
+        else if (t.mode === "Protected") modeCol = `<span class="text-warning">${t.mode}</span>`;
+
+        tr.innerHTML = `
+          <td><strong>${t.id}</strong></td>
+          <td>${t.name}</td>
+          <td>${t.pes.toFixed(3)}</td>
+          <td>${modeCol}</td>
+          <td>${t.key_size > 0 ? t.key_size + 'b' : '-'}</td>
+          <td>${t.adaptive_delay_ms > 0 ? t.adaptive_delay_ms.toFixed(1) + 'ms' : '0ms'}</td>
+        `;
+
+        tr.onclick = function() {
+          selectedPacketId = t.id;
+          renderFormulas(t);
+          renderRouterTraffic(packets);
+        };
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function renderAttackerView(isCompromised, packets) {
+      const header = document.getElementById("attObsHeader");
+      const body = document.getElementById("attObsBody");
+
+      if (!isCompromised) {
+        header.textContent = "Secure Node";
+        body.innerHTML = `
+          <tr>
+            <td colspan="4" class="text-center" style="color:var(--color-success); padding:20px;">
+              [SECURE] This router is NOT an observation point. Attacker cannot intercept traffic here.
+            </td>
+          </tr>
+        `;
+        return;
+      }
+
+      header.textContent = "COMPROMISED OBSERVATION POINT";
+      if (!packets || packets.length === 0) {
+        body.innerHTML = `<tr><td colspan="4" class="text-center" style="color:var(--text-muted);">Awaiting intercepted packets...</td></tr>`;
+        return;
+      }
+
+      body.innerHTML = "";
+      packets.slice(-15).reverse().forEach(t => {
+        const tr = document.createElement("tr");
+        const isShielded = t.decision === 1;
+        const observedName = t.observed_as || (isShielded ? "OPAQUE_HASH" : t.name);
+
+        let matchBadge = `<span class="badge badge-low">No Match</span>`;
+        if (t.is_watchlisted && !isShielded) {
+          matchBadge = `<span class="badge badge-high">WATCHLIST MATCH</span>`;
+        } else if (t.is_watchlisted && isShielded) {
+          matchBadge = `<span class="badge badge-medium">TOKEN SHIELDED</span>`;
+        }
+
+        tr.innerHTML = `
+          <td>${t.time}s</td>
+          <td><code style="color:${isShielded ? 'var(--color-teal)' : 'var(--color-danger)'};">${observedName}</code></td>
+          <td>${matchBadge}</td>
+          <td class="text-teal">${t.conf_on.toFixed(3)}</td>
+        `;
+        body.appendChild(tr);
+      });
+    }
+
+    function renderFormulas(t) {
+      if (!t || !t.breakdown) return;
+      const b = t.breakdown;
+
+      document.getElementById("formulaPktId").textContent = `${t.id} (${t.name}) - Mode: ${t.mode}`;
+
+      document.getElementById("sub_Fc").textContent = b.stage1_tm.F_c.sub;
+      document.getElementById("val_Fc").textContent = "F_c = " + b.stage1_tm.F_c.val;
+
+      document.getElementById("sub_PES").textContent = b.stage2_pe.PES.sub;
+      document.getElementById("val_PES").textContent = "PES = " + b.stage2_pe.PES.val + " (Risk: " + b.stage2_pe.P_i.val + ")";
+
+      document.getElementById("sub_Si").textContent = b.stage3_asc.S_i.sub;
+      document.getElementById("val_Si").textContent = "S_i = " + b.stage3_asc.S_i.val + " | Mode: " + b.stage3_asc.mode.val;
+
+      document.getElementById("sub_Ki").textContent = b.stage4_dcp.K_i.sub;
+      document.getElementById("val_Ki").textContent = "K_i = " + b.stage4_dcp.K_i.val + " | Delta: " + b.stage5_sf.Delta_i.val;
+    }
+
+    function injectInterest() {
+      const name = document.getElementById("injectNameInput").value.trim() || "/c/1";
+      fetch("/inject", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ consumer_id: "s0", name: name })
+      })
+      .then(r => r.json())
+      .then(res => {
+        if (res.trace) {
+          showInjectionResult(res.trace);
+          renderFormulas(res.trace);
+        }
+      });
+    }
+
+    function showInjectionResult(t) {
+      const banner = document.getElementById("injectionResultBanner");
+      banner.style.display = "block";
+      document.getElementById("injResTitle").textContent = `INJECTED INTEREST: ${t.id} (${t.name})`;
+      document.getElementById("injResMode").textContent = t.mode;
+      document.getElementById("injResPath").textContent = t.path.join(" -> ");
+      document.getElementById("injResCache").textContent = t.cache_hit ? `HIT at ${t.cache_node}` : "MISS (Fetched from Producer)";
+      document.getElementById("injResLatency").textContent = t.latency_ms + " ms";
+      document.getElementById("injResDec").textContent = `D_i=${t.decision}, Key=${t.key_size}b, Delay=${t.adaptive_delay_ms}ms`;
+      document.getElementById("injResObs").textContent = `Observed as '${t.observed_as}' by Attacker`;
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      connectWebSocket();
+    });
+  </script>
+</body>
+</html>

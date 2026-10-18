@@ -1,0 +1,1056 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASP Network Lab - Public Dashboard</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/static/lib/d3.v7.min.js"></script>
+  <script src="/static/lib/chart.min.js"></script>
+</head>
+<body>
+
+  <!-- Header Bar -->
+  <header>
+    <nav class="nav-center">
+      <a href="/" class="nav-link active">Dashboard</a>
+      <a href="/network" class="nav-link">Network Controls</a>
+      <a href="/router/r0" class="nav-link">Router Mode</a>
+    </nav>
+  </header>
+
+  <div class="container">
+
+    <!-- Dashboard Simulation Controls & Telemetry Bar -->
+    <div class="card dashboard-toolbar" style="margin-bottom: 16px; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <span class="badge" style="background:#1b2432; color:#fff; font-size:12px; padding:5px 10px;">TIME: <span id="simTime">0.0</span>s</span>
+        <span id="simStatus" class="badge badge-stopped" style="font-size:12px; padding:5px 10px;">STATUS: STOPPED</span>
+        <span class="badge" style="background:#1b2432; color:var(--color-teal); font-size:12px; padding:5px 10px;">SEEDS: 42 / 1337</span>
+        <span id="wsStatus" class="badge badge-disconnected" style="display:none;">WS: DISCONNECTED</span>
+      </div>
+      <div class="btn-group">
+        <button id="btnPlay" class="btn btn-primary" onclick="sendCommand('start')">[ START ]</button>
+        <button id="btnPause" class="btn btn-warning" onclick="sendCommand('pause')">[ PAUSE ]</button>
+        <button id="btnStep" class="btn" onclick="sendCommand('step')">[ STEP ]</button>
+        <button id="btnStop" class="btn btn-danger" onclick="sendCommand('stop')">[ STOP ]</button>
+      </div>
+    </div>
+
+    <!-- Comparison Strip (Top High-Visibility Metric Row) -->
+    <div class="strip-container card">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <line x1="3" y1="9" x2="21" y2="9"/>
+            <line x1="9" y1="21" x2="9" y2="9"/>
+          </svg>
+          Two-World Lockstep Comparison & Paper Reference Benchmarks
+        </span>
+        <div class="btn-group">
+          <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-right:4px;">VIEW WORLD:</span>
+          <button class="btn btn-primary" id="btnWorldBoth" onclick="setWorld('BOTH')">BOTH</button>
+          <button class="btn" id="btnWorldOn" onclick="setWorld('ON')">WASP ON</button>
+          <button class="btn" id="btnWorldOff" onclick="setWorld('OFF')">WASP OFF</button>
+        </div>
+      </div>
+      <table class="comparison-table">
+        <thead>
+          <tr>
+            <th>METRIC</th>
+            <th class="col-wasp-on">WASP ON (PROTECTED)</th>
+            <th class="col-wasp-off">WASP OFF (UNSHIELDED)</th>
+            <th class="col-paper">PAPER-REPORTED REFERENCE</th>
+            <th>STATUS</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Mean Attacker Confidence (P_L)</td>
+            <td id="compConfOn" class="col-wasp-on">0.180</td>
+            <td id="compConfOff" class="col-wasp-off">0.850</td>
+            <td class="col-paper">0.18 (WASP) / 0.85 (Unshielded)</td>
+            <td><span class="badge badge-connected">[OK] Suppressed</span></td>
+          </tr>
+          <tr>
+            <td>Packet Delivery Ratio (PDR)</td>
+            <td id="compPdrOn" class="col-wasp-on">0.940</td>
+            <td id="compPdrOff" class="col-wasp-off">0.960</td>
+            <td class="col-paper">0.94 (WASP) / 0.87 (Static Crypto)</td>
+            <td><span class="badge badge-connected">[OK] Nominal</span></td>
+          </tr>
+          <tr>
+            <td>Cache Hit Ratio (CHR)</td>
+            <td id="compChr" class="col-wasp-on">0.350</td>
+            <td class="col-wasp-off">0.350</td>
+            <td class="col-paper">0.350</td>
+            <td><span class="badge badge-connected">[OK] Expected</span></td>
+          </tr>
+          <tr>
+            <td>Mean Latency (Hit / Miss)</td>
+            <td id="compLat" class="col-wasp-on">5.0ms / 27.5ms</td>
+            <td class="col-wasp-off">5.0ms / 20.0ms</td>
+            <td class="col-paper">Hit: 5.0ms / Miss: 28.0ms</td>
+            <td><span class="badge badge-connected">[OK] RTT + Overhead</span></td>
+          </tr>
+          <tr>
+            <td>Shielding & Crypto Overhead (O_s, O_c)</td>
+            <td id="compOverhead" class="col-wasp-on">O_s=0.12, O_c=0.08</td>
+            <td class="col-wasp-off">0.00 / 0.00</td>
+            <td class="col-paper">O_s=0.12, O_c=0.08</td>
+            <td><span class="badge badge-connected">[OK] Adaptive</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Main Grid: Topology (Left) + Trace Panel (Right) -->
+    <div class="grid-main">
+      
+      <!-- Topology Card -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="6" cy="6" r="3"/>
+              <circle cx="18" cy="6" r="3"/>
+              <circle cx="12" cy="18" r="3"/>
+              <line x1="8.5" y1="7.5" x2="10.5" y2="15.5"/>
+              <line x1="15.5" y1="7.5" x2="13.5" y2="15.5"/>
+            </svg>
+            Interactive Network Topology & Animated Packet Flow
+          </span>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; gap:12px;">
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#457b9d"/></svg>Subscribers</span>
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#444444"/></svg>Routers</span>
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><polygon points="5,1 9,9 1,9" fill="#555555"/></svg>Observation Point</span>
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#000000"/></svg>Producer</span>
+          </div>
+        </div>
+        <div class="topology-container" id="topologyContainer">
+          <svg class="topology-svg" id="topologySvg"></svg>
+          <!-- Focused Packet Callout Box -->
+          <div class="topology-callout" id="topologyCallout" style="display:none;">
+            <div style="font-weight:700; color:var(--color-primary); border-bottom:1px solid #334; padding-bottom:4px; margin-bottom:4px;" id="calloutTitle">PACKET FOCUS</div>
+            <div>Name: <span id="calloutName" style="color:#fff;">-</span></div>
+            <div>PES: <span id="calloutPes" style="color:#000; font-weight:bold;">-</span> | Risk P: <span id="calloutRisk" style="color:#000; font-weight:bold;">-</span></div>
+            <div>Mode: <span id="calloutMode" style="color:#000; font-weight:bold;">-</span> | Decision D: <span id="calloutDec">-</span></div>
+            <div>Key K: <span id="calloutKey">-</span> | Delay Delta: <span id="calloutDelay">-</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Packet Trace Panel (Right Side) -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="8" y1="6" x2="21" y2="6"/>
+              <line x1="8" y1="12" x2="21" y2="12"/>
+              <line x1="8" y1="18" x2="21" y2="18"/>
+              <line x1="3" y1="6" x2="3.01" y2="6"/>
+              <line x1="3" y1="12" x2="3.01" y2="12"/>
+              <line x1="3" y1="18" x2="3.01" y2="18"/>
+            </svg>
+            Packet Trace Log
+          </span>
+          <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);" id="traceCount">0 Interests</span>
+        </div>
+        <div class="table-container" style="max-height: 440px;">
+          <table class="data-table" id="traceTable">
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>NAME</th>
+                <th>PES</th>
+                <th>RISK (P)</th>
+                <th>LEVEL</th>
+                <th>MODE</th>
+                <th>D</th>
+              </tr>
+            </thead>
+            <tbody id="traceTableBody">
+              <tr>
+                <td colspan="7" class="text-center" style="color:var(--text-muted); padding:20px;">Awaiting simulation traffic...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Formula Panel (Appears / Updates when a packet is clicked) -->
+    <div class="card" style="margin-bottom: 16px;" id="formulaPanel">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Formula Breakdown & Pipeline Derivations (<span id="formulaPktId" style="color:var(--color-teal);">No Packet Selected</span>)
+        </span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">ALGORITHM 1: TM -> PE -> ASC -> DCP -> SF</span>
+      </div>
+      <div class="card-body">
+        <div class="formula-container">
+          
+          <!-- Stage 1: TM -->
+          <div class="formula-stage-card">
+            <div class="formula-stage-title">
+              <span>STAGE 1: TRAFFIC MONITORING (TM)</span>
+              <span>Eqs. 1-6</span>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Request Frequency F_c</div>
+              <div class="formula-math" id="eq_Fc">F_c(t) = \sum \delta(I_i, c)</div>
+              <div class="formula-sub" id="sub_Fc">Sub: count in sliding window W=50</div>
+              <div class="formula-val" id="val_Fc">F_c = -</div>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Average Interval T_c & Hop H_c</div>
+              <div class="formula-math" id="eq_Tc">T_c = (T_N - T_1)/(N - 1)</div>
+              <div class="formula-sub" id="sub_Tc">Sub: timestamps over window</div>
+              <div class="formula-val" id="val_Tc">T_c = - | H_c = -</div>
+            </div>
+          </div>
+
+          <!-- Stage 2: PE -->
+          <div class="formula-stage-card">
+            <div class="formula-stage-title">
+              <span>STAGE 2: PRIVACY EXPOSURE (PE)</span>
+              <span>Eqs. 16-21</span>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Privacy Exposure Score (PES)</div>
+              <div class="formula-math" id="eq_PES">PES = \alpha F' + \beta C' + \gamma T' + \delta H'</div>
+              <div class="formula-sub" id="sub_PES">Sub: 0.40*F' + 0.20*C' + 0.20*T' + 0.20*H'</div>
+              <div class="formula-val" id="val_PES">PES = -</div>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Normalized Risk P_i & Level</div>
+              <div class="formula-math" id="eq_Pi">P_i = norm(PES) \to \{Low, Med, High\}</div>
+              <div class="formula-sub" id="sub_Pi">Sub: thresholds tau_1=0.50, tau_2=0.65</div>
+              <div class="formula-val" id="val_Pi">P_i = - | Level: -</div>
+            </div>
+          </div>
+
+          <!-- Stage 3: ASC -->
+          <div class="formula-stage-card">
+            <div class="formula-stage-title">
+              <span>STAGE 3: SHIELDING CONTROL (ASC)</span>
+              <span>Eqs. 22-26</span>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Sigmoid Shielding Intensity S_i</div>
+              <div class="formula-math" id="eq_Si">S_i = \frac{1}{1 + e^{-\kappa (P_i - \tau)}}</div>
+              <div class="formula-sub" id="sub_Si">Sub: kappa=8.0, tau=0.50</div>
+              <div class="formula-val" id="val_Si">S_i = -</div>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Protection Mode & Decision D_i</div>
+              <div class="formula-math" id="eq_Mi">M_i \in \{Normal, Protected, Shielded\}</div>
+              <div class="formula-sub" id="sub_Mi">Sub: eta_1=0.40, eta_2=0.70</div>
+              <div class="formula-val" id="val_Mi">Mode = - | D_i = -</div>
+            </div>
+          </div>
+
+          <!-- Stage 4: DCP & Stage 5: SF -->
+          <div class="formula-stage-card">
+            <div class="formula-stage-title">
+              <span>STAGE 4 & 5: CRYPTO & SECURE FORWARDING</span>
+              <span>Eqs. 27-40</span>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Dynamic Key K_i & Encryption Time</div>
+              <div class="formula-math" id="eq_Ki">K_i = K_{min} + S_i(K_{max}-K_{min})</div>
+              <div class="formula-sub" id="sub_Ki">Sub: K_min=128, K_max=256</div>
+              <div class="formula-val" id="val_Ki">K_i = - | T_enc = -</div>
+            </div>
+            <div class="formula-item">
+              <div class="formula-label">Adaptive Delay & Route Diversity</div>
+              <div class="formula-math" id="eq_Delta">\Delta_i = \Delta_{min} + (\Delta_{max}-\Delta_{min})S_i</div>
+              <div class="formula-sub" id="sub_Delta">Sub: Delta_min=5ms, Delta_max=50ms, rho=1.5</div>
+              <div class="formula-val" id="val_Delta">\Delta_i = - | R_i = -</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Attacker Watchlist Panel -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12,2 22,22 2,22" />
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          Watchlist Attacker Posterior Inference Monitor (P_L(c))
+        </span>
+        <div style="display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+          <div style="display:flex; align-items:center; gap:6px;">
+            <label for="watchlistSelect" style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); font-weight:600;">SELECT TARGET CONTENT:</label>
+            <select id="watchlistSelect" class="form-select" style="font-family:var(--font-mono); font-size:12px; padding:4px 8px; border:1px solid var(--border-color); border-radius:4px;" onchange="onWatchlistSelectChange(this.value)">
+              <option value="">Loading watchlist...</option>
+            </select>
+          </div>
+          <div style="font-family:var(--font-mono); font-size:11px; display:flex; gap:10px;">
+            <span><span style="color:var(--color-teal);">&#9632;</span> WASP ON</span>
+            <span><span style="color:var(--color-orange);">&#9632;</span> WASP OFF</span>
+          </div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="watchlistSelectedView">
+          <div style="color:var(--text-muted); font-family:var(--font-mono); text-align:center; padding:15px;">Connecting to monitor...</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Live Metric Graphs (6 Responsive Canvas Charts) -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          Live Evaluation Graphs with Paper Reference Baselines
+        </span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">
+          Dashed Lines = Paper References (Lal & Malani)
+        </span>
+      </div>
+      <div class="card-body">
+        <div class="charts-grid">
+          
+          <!-- Chart 1: Attacker Confidence -->
+          <div class="chart-card">
+            <div class="chart-card-title">ATTACKER MEAN CONFIDENCE OVER TIME</div>
+            <div class="chart-container"><canvas id="chartAttacker"></canvas></div>
+          </div>
+
+          <!-- Chart 2: Latency per Class -->
+          <div class="chart-card">
+            <div class="chart-card-title">LATENCY OVER TIME (HIT VS MISS CLASSES)</div>
+            <div class="chart-container"><canvas id="chartLatency"></canvas></div>
+          </div>
+
+          <!-- Chart 3: PDR, CHR, ISR -->
+          <div class="chart-card">
+            <div class="chart-card-title">PACKET DELIVERY (PDR) & CACHE HIT RATIO (CHR)</div>
+            <div class="chart-container"><canvas id="chartDelivery"></canvas></div>
+          </div>
+
+          <!-- Chart 4: Overheads -->
+          <div class="chart-card">
+            <div class="chart-card-title">SHIELDING & CRYPTO OVERHEADS (O_s, O_c)</div>
+            <div class="chart-container"><canvas id="chartOverhead"></canvas></div>
+          </div>
+
+          <!-- Chart 5: Shielding Intensity & Risk Distribution -->
+          <div class="chart-card">
+            <div class="chart-card-title">SHIELDING INTENSITY (S_i) & RISK (P_i) HISTOGRAM</div>
+            <div class="chart-container"><canvas id="chartHistogram"></canvas></div>
+          </div>
+
+          <!-- Chart 6: Forwarding Diversity & Hop Count -->
+          <div class="chart-card">
+            <div class="chart-card-title">FORWARDING DIVERSITY FACTOR (R_i) OVER TIME</div>
+            <div class="chart-container"><canvas id="chartDiversity"></canvas></div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Dashboard JavaScript Logic -->
+  <script>
+    let ws = null;
+    let latestState = null;
+    let selectedPacketId = null;
+
+    let chartAttacker, chartLatency, chartDelivery, chartOverhead, chartHistogram, chartDiversity;
+
+    function connectWebSocket() {
+      const loc = window.location;
+      const wsUri = (loc.protocol === "https:" ? "wss://" : "ws://") + loc.host + "/ws";
+      ws = new WebSocket(wsUri);
+
+      ws.onopen = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-connected";
+        badge.textContent = "WS: CONNECTED";
+      };
+
+      ws.onclose = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-disconnected";
+        badge.textContent = "WS: DISCONNECTED";
+        setTimeout(connectWebSocket, 1500);
+      };
+
+      ws.onerror = function() {
+        ws.close();
+      };
+
+      ws.onmessage = function(event) {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "state_update" || msg.type === "initial_state") {
+            handleStateUpdate(msg.data);
+          }
+        } catch(e) {
+          console.error("WS Parse error", e);
+        }
+      };
+    }
+
+    function sendCommand(action, params = {}) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: action, ...params }));
+      } else {
+        fetch("/" + action, { method: "POST" });
+      }
+    }
+
+    let currentWorld = "BOTH";
+
+    function applyWorldFilterToTable(world) {
+      const onCols = document.querySelectorAll(".col-wasp-on");
+      const offCols = document.querySelectorAll(".col-wasp-off");
+      
+      if (world === "ON") {
+        onCols.forEach(el => {
+          el.style.display = "";
+          el.style.backgroundColor = "rgba(3, 105, 161, 0.08)";
+        });
+        offCols.forEach(el => el.style.display = "none");
+      } else if (world === "OFF") {
+        onCols.forEach(el => el.style.display = "none");
+        offCols.forEach(el => {
+          el.style.display = "";
+          el.style.backgroundColor = "rgba(194, 65, 12, 0.08)";
+        });
+      } else { // BOTH
+        onCols.forEach(el => {
+          el.style.display = "";
+          el.style.backgroundColor = "";
+        });
+        offCols.forEach(el => {
+          el.style.display = "";
+          el.style.backgroundColor = "";
+        });
+      }
+    }
+
+    function setWorld(world) {
+      currentWorld = world;
+      document.getElementById("btnWorldBoth").className = world === "BOTH" ? "btn btn-primary" : "btn";
+      document.getElementById("btnWorldOn").className = world === "ON" ? "btn btn-primary" : "btn";
+      document.getElementById("btnWorldOff").className = world === "OFF" ? "btn btn-primary" : "btn";
+      applyWorldFilterToTable(world);
+      sendCommand("set_world", { world: world });
+    }
+
+    let lastChartUpdateTime = 0;
+    let lastTableUpdateTime = 0;
+    let lastWatchlistUpdateTime = 0;
+
+    function handleStateUpdate(data) {
+      latestState = data;
+
+      const simBadge = document.getElementById("simStatus");
+      if (simBadge) {
+        simBadge.textContent = "STATUS: " + data.status;
+        if (data.status === "RUNNING") simBadge.className = "badge badge-running";
+        else if (data.status === "PAUSED") simBadge.className = "badge badge-paused";
+        else simBadge.className = "badge badge-stopped";
+      }
+
+      const timeEl = document.getElementById("simTime");
+      if (timeEl) timeEl.textContent = data.sim_time.toFixed(1);
+
+      if (data.metrics && data.metrics.length > 0) {
+        const lastM = data.metrics[data.metrics.length - 1];
+        if (document.getElementById("compConfOn")) document.getElementById("compConfOn").textContent = lastM.conf_on.toFixed(3);
+        if (document.getElementById("compConfOff")) document.getElementById("compConfOff").textContent = lastM.conf_off.toFixed(3);
+        if (document.getElementById("compPdrOn")) document.getElementById("compPdrOn").textContent = lastM.pdr_on.toFixed(3);
+        if (document.getElementById("compPdrOff")) document.getElementById("compPdrOff").textContent = lastM.pdr_off.toFixed(3);
+        if (document.getElementById("compChr")) document.getElementById("compChr").textContent = lastM.chr.toFixed(3);
+        if (document.getElementById("compLat")) document.getElementById("compLat").textContent = lastM.lat_hit.toFixed(1) + "ms / " + lastM.lat_miss.toFixed(1) + "ms";
+        if (document.getElementById("compOverhead")) document.getElementById("compOverhead").textContent = "O_s=" + lastM.O_s.toFixed(3) + ", O_c=" + lastM.O_c.toFixed(3);
+      }
+
+      applyWorldFilterToTable(currentWorld);
+
+      // Packet animation runs on every frame for fluid movement
+      renderTopology(data.topology, data.active_packets, data.routers);
+
+      const now = performance.now();
+
+      // Throttle Trace Table updates to ~2.5 Hz to prevent DOM churn
+      if (now - lastTableUpdateTime > 350) {
+        lastTableUpdateTime = now;
+        renderTraceTable(data.recent_traces);
+      }
+
+      // Throttle Watchlist updates to ~2.5 Hz
+      if (now - lastWatchlistUpdateTime > 350) {
+        lastWatchlistUpdateTime = now;
+        renderWatchlist(data.watchlist);
+      }
+
+      // Throttle Chart Updates to ~2 Hz
+      if (now - lastChartUpdateTime > 450) {
+        lastChartUpdateTime = now;
+        updateCharts(data.metrics, data.recent_traces, data.paper_reference);
+      }
+
+      if (selectedPacketId && data.recent_traces) {
+        const found = data.recent_traces.find(t => t.id === selectedPacketId);
+        if (found) renderFormulas(found);
+      } else if (!selectedPacketId && data.latest_trace) {
+        renderFormulas(data.latest_trace);
+      }
+    }
+
+    let d3Svg = null;
+    let nodeCoordinates = {};
+
+    function initTopologyD3() {
+      d3Svg = d3.select("#topologySvg");
+    }
+
+    let lastRenderedTopologyKey = "";
+
+    function renderTopology(topology, activePackets, routers) {
+      if (!d3Svg || !topology) return;
+      
+      const nodes = topology.nodes || [];
+      const edges = topology.edges || [];
+      const topologyKey = nodes.map(n => n.id).join(",") + "|" + edges.length;
+
+      if (topologyKey !== lastRenderedTopologyKey) {
+        lastRenderedTopologyKey = topologyKey;
+        const containerW = document.getElementById("topologyContainer").clientWidth || 850;
+        const width = Math.max(800, containerW);
+
+        const subs = nodes.filter(n => n.type === "subscriber");
+        const rtrs = nodes.filter(n => n.type === "router");
+        const prods = nodes.filter(n => n.type === "producer");
+
+        // Adaptive Canvas Height based on element counts
+        const maxColCount = Math.max(
+          subs.length > 6 ? Math.ceil(subs.length / 2) : subs.length,
+          prods.length > 3 ? Math.ceil(prods.length / 2) : prods.length,
+          rtrs.length > 5 ? 3 : 2
+        );
+        const height = Math.max(500, Math.min(640, maxColCount * 65 + 120));
+        d3Svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+        // Adaptive Node Radius
+        const rRadius = Math.max(16, Math.min(22, Math.floor(240 / Math.max(1, rtrs.length))));
+        const subRadius = Math.max(13, Math.min(18, Math.floor(260 / Math.max(1, subs.length))));
+        const prodRadius = Math.max(14, Math.min(20, Math.floor(240 / Math.max(1, prods.length))));
+
+        // 1. Subscribers Placement (Left Arena)
+        const subBaseX = 80;
+        if (subs.length <= 6) {
+          subs.forEach((n, i) => {
+            const y = (height - 80) / (subs.length + 1) * (i + 1) + 40;
+            nodeCoordinates[n.id] = { x: subBaseX, y: y, data: n, r: subRadius };
+          });
+        } else {
+          const rows = Math.ceil(subs.length / 2);
+          subs.forEach((n, i) => {
+            const col = i % 2;
+            const row = Math.floor(i / 2);
+            const x = subBaseX + (col === 0 ? -15 : 45);
+            const y = (height - 80) / (rows + 1) * (row + 1) + 40;
+            nodeCoordinates[n.id] = { x: x, y: y, data: n, r: subRadius };
+          });
+        }
+
+        // 2. Producers Placement (Right Arena)
+        const prodBaseX = width - 85;
+        if (prods.length <= 3) {
+          prods.forEach((n, i) => {
+            const y = (height - 80) / (prods.length + 1) * (i + 1) + 40;
+            nodeCoordinates[n.id] = { x: prodBaseX, y: y, data: n, r: prodRadius };
+          });
+        } else {
+          const rows = Math.ceil(prods.length / 2);
+          prods.forEach((n, i) => {
+            const col = i % 2;
+            const row = Math.floor(i / 2);
+            const x = prodBaseX - (col === 0 ? 45 : -15);
+            const y = (height - 80) / (rows + 1) * (row + 1) + 40;
+            nodeCoordinates[n.id] = { x: x, y: y, data: n, r: prodRadius };
+          });
+        }
+
+        // 3. Routers Placement (Center Arena)
+        const rtrStartX = subs.length > 6 ? 200 : 180;
+        const rtrEndX = prods.length > 3 ? width - 200 : width - 180;
+        const rtrSpanX = rtrEndX - rtrStartX;
+        const centerY = height / 2;
+
+        const isMesh = (topology.pattern === "mesh" || edges.length > rtrs.length + 2);
+
+        if (rtrs.length <= 4 && !isMesh) {
+          rtrs.forEach((n, i) => {
+            const step = rtrs.length > 1 ? rtrSpanX / (rtrs.length - 1) : 0;
+            const x = rtrs.length === 1 ? (rtrStartX + rtrEndX) / 2 : rtrStartX + i * step;
+            nodeCoordinates[n.id] = { x: x, y: centerY, data: n, r: rRadius };
+          });
+        } else if (isMesh) {
+          const rx = rtrSpanX * 0.42;
+          const ry = (height * 0.32);
+          const centerX = (rtrStartX + rtrEndX) / 2;
+          rtrs.forEach((n, i) => {
+            const angle = (2 * Math.PI / rtrs.length) * i - Math.PI / 2;
+            const x = centerX + rx * Math.cos(angle);
+            const y = centerY + ry * Math.sin(angle);
+            nodeCoordinates[n.id] = { x: x, y: y, data: n, r: rRadius };
+          });
+        } else {
+          const half = Math.ceil(rtrs.length / 2);
+          const row1 = rtrs.slice(0, half);
+          const row2 = rtrs.slice(half);
+          const yTop = centerY - 65;
+          const yBottom = centerY + 65;
+
+          row1.forEach((n, i) => {
+            const step = half > 1 ? rtrSpanX / (half - 1) : 0;
+            const x = rtrStartX + i * step;
+            nodeCoordinates[n.id] = { x: x, y: yTop, data: n, r: rRadius };
+          });
+
+          row2.forEach((n, i) => {
+            const step = row2.length > 1 ? rtrSpanX / (row2.length - 1) : 0;
+            const x = row2.length === 1 ? (rtrStartX + rtrEndX) / 2 : rtrStartX + i * step;
+            nodeCoordinates[n.id] = { x: x, y: yBottom, data: n, r: rRadius };
+          });
+        }
+
+        // Draw Links
+        let linkSelection = d3Svg.selectAll(".link-line")
+          .data(edges, d => d.src + "-" + d.dst);
+
+        linkSelection.exit().remove();
+
+        linkSelection.enter()
+          .append("line")
+          .attr("class", "link-line")
+          .merge(linkSelection)
+          .attr("x1", d => nodeCoordinates[d.src] ? nodeCoordinates[d.src].x : 0)
+          .attr("y1", d => nodeCoordinates[d.src] ? nodeCoordinates[d.src].y : 0)
+          .attr("x2", d => nodeCoordinates[d.dst] ? nodeCoordinates[d.dst].x : 0)
+          .attr("y2", d => nodeCoordinates[d.dst] ? nodeCoordinates[d.dst].y : 0);
+
+        // Draw Nodes
+        let nodeSelection = d3Svg.selectAll(".node-group")
+          .data(nodes, d => d.id);
+
+        nodeSelection.exit().remove();
+
+        const nodeEnter = nodeSelection.enter()
+          .append("g")
+          .attr("class", "node-group")
+          .on("click", (evt, d) => {
+            if (d.type === "router") {
+              window.location.href = "/router/" + d.id;
+            }
+          });
+
+        nodeEnter.append("circle")
+          .attr("class", d => {
+            let cls = "node-circle node-" + d.type;
+            if (d.is_compromised) cls += " node-compromised";
+            return cls;
+          });
+
+        nodeEnter.each(function(d) {
+          if (d.is_compromised) {
+            d3.select(this)
+              .append("polygon")
+              .attr("points", "-6,-26 6,-26 0,-34")
+              .attr("fill", "var(--color-danger)")
+              .attr("stroke", "#fff")
+              .attr("stroke-width", "1");
+          }
+        });
+
+        nodeEnter.append("text")
+          .attr("class", "node-label")
+          .attr("dy", 4)
+          .text(d => d.id.toUpperCase());
+
+        nodeSelection.merge(nodeEnter)
+          .attr("transform", d => {
+            const coord = nodeCoordinates[d.id] || { x: 0, y: 0 };
+            return `translate(${coord.x}, ${coord.y})`;
+          })
+          .select("circle")
+          .attr("r", d => nodeCoordinates[d.id] ? nodeCoordinates[d.id].r : 20);
+      }
+
+      // Draw / Update Packets with GPU hardware smooth translation
+      const packets = activePackets || [];
+      let packetSelection = d3Svg.selectAll(".packet-element")
+        .data(packets, d => d.id);
+
+      packetSelection.exit().remove();
+
+      packetSelection.enter()
+        .append("g")
+        .attr("class", "packet-element")
+        .each(function(d) {
+          if (d.type === "Interest") {
+            let fillClass = "packet-interest";
+            if (d.mode === "Shielded") fillClass = "packet-interest-shielded";
+            else if (d.mode === "Protected") fillClass = "packet-interest-protected";
+            d3.select(this)
+              .append("rect")
+              .attr("class", fillClass)
+              .attr("x", -5).attr("y", -5)
+              .attr("width", 10).attr("height", 10)
+              .attr("rx", 2);
+          } else {
+            d3.select(this)
+              .append("circle")
+              .attr("class", "packet-data")
+              .attr("r", 5);
+          }
+        })
+        .merge(packetSelection)
+        .attr("transform", d => {
+          const srcCoord = nodeCoordinates[d.src] || { x: 0, y: 0 };
+          const dstCoord = nodeCoordinates[d.dst] || { x: 0, y: 0 };
+          const curX = srcCoord.x + (dstCoord.x - srcCoord.x) * d.progress;
+          const curY = srcCoord.y + (dstCoord.y - srcCoord.y) * d.progress;
+          return `translate(${curX}, ${curY})`;
+        });
+    }
+
+    function renderTraceTable(traces) {
+      const tbody = document.getElementById("traceTableBody");
+      document.getElementById("traceCount").textContent = (traces ? traces.length : 0) + " Interests";
+      if (!traces || traces.length === 0) return;
+
+      tbody.innerHTML = "";
+      traces.slice(-25).reverse().forEach(t => {
+        const tr = document.createElement("tr");
+        if (t.id === selectedPacketId) tr.className = "selected";
+
+        let riskBadge = `<span class="badge badge-low">${t.risk_level}</span>`;
+        if (t.risk_level === "Medium") riskBadge = `<span class="badge badge-medium">${t.risk_level}</span>`;
+        if (t.risk_level === "High") riskBadge = `<span class="badge badge-high">${t.risk_level}</span>`;
+
+        let modeCol = t.mode;
+        if (t.mode === "Shielded") modeCol = `<span class="text-danger">${t.mode}</span>`;
+        else if (t.mode === "Protected") modeCol = `<span style="color:#000; font-weight:bold;">${t.mode}</span>`;
+
+        tr.innerHTML = `
+          <td><strong>${t.id}</strong></td>
+          <td>${t.name}</td>
+          <td>${t.pes.toFixed(3)}</td>
+          <td>${t.risk.toFixed(3)}</td>
+          <td>${riskBadge}</td>
+          <td>${modeCol}</td>
+          <td><strong>${t.decision}</strong></td>
+        `;
+
+        tr.onclick = function() {
+          selectedPacketId = t.id;
+          renderFormulas(t);
+          showCallout(t);
+          renderTraceTable(traces);
+        };
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function showCallout(t) {
+      const callout = document.getElementById("topologyCallout");
+      callout.style.display = "block";
+      document.getElementById("calloutTitle").textContent = "FOCUSED: " + t.id;
+      document.getElementById("calloutName").textContent = t.name + (t.is_watchlisted ? " [WATCHLISTED]" : "");
+      document.getElementById("calloutPes").textContent = t.pes.toFixed(3);
+      document.getElementById("calloutRisk").textContent = t.risk.toFixed(3) + ` (${t.risk_level})`;
+      document.getElementById("calloutMode").textContent = t.mode;
+      document.getElementById("calloutDec").textContent = t.decision === 1 ? "1 (SHIELD)" : "0 (FORWARD)";
+      document.getElementById("calloutKey").textContent = t.key_size > 0 ? t.key_size + " bits" : "None";
+      document.getElementById("calloutDelay").textContent = t.adaptive_delay_ms > 0 ? t.adaptive_delay_ms.toFixed(1) + " ms" : "0 ms";
+    }
+
+    function renderFormulas(t) {
+      if (!t || !t.breakdown) return;
+      const b = t.breakdown;
+
+      document.getElementById("formulaPktId").textContent = `${t.id} (${t.name}) - Mode: ${t.mode}`;
+
+      document.getElementById("sub_Fc").textContent = b.stage1_tm.F_c.sub;
+      document.getElementById("val_Fc").textContent = "F_c = " + b.stage1_tm.F_c.val;
+      document.getElementById("sub_Tc").textContent = b.stage1_tm.T_c.sub;
+      document.getElementById("val_Tc").textContent = "T_c = " + b.stage1_tm.T_c.val + " | H_c = " + b.stage1_tm.H_c.val;
+
+      document.getElementById("sub_PES").textContent = b.stage2_pe.PES.sub;
+      document.getElementById("val_PES").textContent = "PES = " + b.stage2_pe.PES.val;
+      document.getElementById("sub_Pi").textContent = b.stage2_pe.P_i.sub;
+      document.getElementById("val_Pi").textContent = "P_i = " + b.stage2_pe.P_i.val + " | Level: " + b.stage2_pe.risk_level.val;
+
+      document.getElementById("sub_Si").textContent = b.stage3_asc.S_i.sub;
+      document.getElementById("val_Si").textContent = "S_i = " + b.stage3_asc.S_i.val;
+      document.getElementById("sub_Mi").textContent = b.stage3_asc.mode.sub;
+      document.getElementById("val_Mi").textContent = "Mode = " + b.stage3_asc.mode.val + " | D_i = " + b.stage3_asc.decision.val;
+
+      document.getElementById("sub_Ki").textContent = b.stage4_dcp.K_i.sub;
+      document.getElementById("val_Ki").textContent = "K_i = " + b.stage4_dcp.K_i.val + " | T_enc = " + b.stage4_dcp.T_enc.val;
+      document.getElementById("sub_Delta").textContent = b.stage5_sf.Delta_i.sub;
+      document.getElementById("val_Delta").textContent = "\u0394_i = " + b.stage5_sf.Delta_i.val + " | R_i = " + b.stage5_sf.R_i.val;
+    }
+
+    let currentSelectedTarget = null;
+
+    function onWatchlistSelectChange(val) {
+      currentSelectedTarget = val;
+      if (latestState && latestState.watchlist) {
+        renderWatchlist(latestState.watchlist);
+      }
+    }
+
+    function renderWatchlist(watchlist) {
+      if (!watchlist || watchlist.length === 0) return;
+
+      const select = document.getElementById("watchlistSelect");
+      const container = document.getElementById("watchlistSelectedView");
+      if (!select || !container) return;
+
+      const currentVal = currentSelectedTarget || watchlist[0].name;
+      if (select.options.length !== watchlist.length || select.options[0].value === "") {
+        select.innerHTML = "";
+        watchlist.forEach(item => {
+          const opt = document.createElement("option");
+          opt.value = item.name;
+          opt.textContent = `${item.name} (Conf: ON=${item.conf_on.toFixed(2)}, OFF=${item.conf_off.toFixed(2)})`;
+          if (item.name === currentVal) opt.selected = true;
+          select.appendChild(opt);
+        });
+      }
+
+      currentSelectedTarget = select.value || watchlist[0].name;
+      const selectedItem = watchlist.find(item => item.name === currentSelectedTarget) || watchlist[0];
+
+      const pctOn = Math.min(100, selectedItem.conf_on * 100);
+      const pctOff = Math.min(100, selectedItem.conf_off * 100);
+      const isShielded = selectedItem.conf_on < selectedItem.conf_off;
+
+      container.innerHTML = `
+        <div class="watchlist-card" style="max-width: 650px; margin: 0 auto; padding: 18px; border: 1.5px solid var(--border-color); border-radius: 8px; background: #fafafa;">
+          <div class="watchlist-card-header" style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
+            <div>
+              <span style="font-family:var(--font-mono); font-size:16px; font-weight:700; color:var(--text-main);">${selectedItem.name}</span>
+              <span style="font-family:var(--font-mono); font-size:11px; margin-left:8px; color:var(--text-muted);">[Target Watchlist Item]</span>
+            </div>
+            <span class="badge ${isShielded ? 'badge-connected' : 'badge-danger'}" style="font-size:11px; padding:4px 8px;">
+              ${isShielded ? '[SHIELDED - LOW LEAKAGE]' : '[EXPOSED - HIGH LEAKAGE]'}
+            </span>
+          </div>
+
+          <div class="conf-bar-group" style="display:flex; flex-direction:column; gap:12px;">
+            <div>
+              <div class="conf-bar-label" style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:12px; margin-bottom:4px;">
+                <span style="color:var(--color-teal); font-weight:600;">WASP ON (Adaptive Opaque Tokens & Delay):</span>
+                <span style="font-weight:700; color:var(--color-teal);">${selectedItem.conf_on.toFixed(3)} (${pctOn.toFixed(1)}%)</span>
+              </div>
+              <div class="conf-bar-track" style="height:12px; background:#e2e8f0; border-radius:6px; overflow:hidden;">
+                <div class="conf-bar-fill-on" style="width: ${pctOn}%; height:100%; background:var(--color-teal); border-radius:6px; transition: width 0.3s ease;"></div>
+              </div>
+            </div>
+
+            <div>
+              <div class="conf-bar-label" style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:12px; margin-bottom:4px;">
+                <span style="color:var(--color-orange); font-weight:600;">WASP OFF (Unshielded Plaintext Traffic):</span>
+                <span style="font-weight:700; color:var(--color-orange);">${selectedItem.conf_off.toFixed(3)} (${pctOff.toFixed(1)}%)</span>
+              </div>
+              <div class="conf-bar-track" style="height:12px; background:#e2e8f0; border-radius:6px; overflow:hidden;">
+                <div class="conf-bar-fill-off" style="width: ${pctOff}%; height:100%; background:var(--color-orange); border-radius:6px; transition: width 0.3s ease;"></div>
+              </div>
+            </div>
+
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:6px; padding-top:10px; border-top:1px dashed var(--border-color); display:flex; justify-content:space-between;">
+              <span>Attacker Posterior Suppression: <strong>${((selectedItem.conf_off - selectedItem.conf_on) * 100).toFixed(1)}% reduction</strong></span>
+              <span>Prior Beta: &alpha;=1, &beta;=9</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function initCharts() {
+      const commonOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 0 },
+        scales: {
+          x: { grid: { color: "#eeeeee" }, ticks: { color: "#000000", font: { family: "monospace", size: 9 } } },
+          y: { grid: { color: "#eeeeee" }, ticks: { color: "#000000", font: { family: "monospace", size: 9 } } }
+        },
+        plugins: {
+          legend: { labels: { color: "#000000", font: { family: "monospace", size: 10 } } }
+        }
+      };
+
+      chartAttacker = new Chart(document.getElementById("chartAttacker"), {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            { label: "WASP ON (Live)", borderColor: "#1f77b4", backgroundColor: "#1f77b4", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "WASP OFF (Live)", borderColor: "#ff7f0e", backgroundColor: "#ff7f0e", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Paper Unshielded (0.85)", borderColor: "#ff7f0e", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 },
+            { label: "Paper WASP (0.18)", borderColor: "#1f77b4", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
+          ]
+        },
+        options: commonOptions
+      });
+
+      chartLatency = new Chart(document.getElementById("chartLatency"), {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            { label: "Cache Hit (Live)", borderColor: "#2ca02c", backgroundColor: "#2ca02c", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Cache Miss (Live)", borderColor: "#d62728", backgroundColor: "#d62728", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Paper Hit (5ms)", borderColor: "#2ca02c", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 },
+            { label: "Paper Miss (28ms)", borderColor: "#d62728", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
+          ]
+        },
+        options: commonOptions
+      });
+
+      chartDelivery = new Chart(document.getElementById("chartDelivery"), {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            { label: "PDR WASP (Live)", borderColor: "#1f77b4", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "CHR (Live)", borderColor: "#9467bd", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Paper PDR (0.94)", borderColor: "#1f77b4", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 },
+            { label: "Paper CHR (0.35)", borderColor: "#9467bd", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
+          ]
+        },
+        options: commonOptions
+      });
+
+      chartOverhead = new Chart(document.getElementById("chartOverhead"), {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            { label: "Shielding Overhead O_s", borderColor: "#d62728", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Crypto Overhead O_c", borderColor: "#17becf", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Paper O_s (0.12)", borderColor: "#d62728", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 },
+            { label: "Paper O_c (0.08)", borderColor: "#17becf", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
+          ]
+        },
+        options: commonOptions
+      });
+
+      chartHistogram = new Chart(document.getElementById("chartHistogram"), {
+        type: "bar",
+        data: {
+          labels: ["0.0-0.2", "0.2-0.4", "0.4-0.6", "0.6-0.8", "0.8-1.0"],
+          datasets: [
+            { label: "Shielding Intensity S_i", backgroundColor: "#1f77b4", data: [0, 0, 0, 0, 0] },
+            { label: "Risk P_i", backgroundColor: "#ff7f0e", data: [0, 0, 0, 0, 0] }
+          ]
+        },
+        options: commonOptions
+      });
+
+      chartDiversity = new Chart(document.getElementById("chartDiversity"), {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            { label: "Diversity R_i (Live)", borderColor: "#9467bd", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Paper Baseline (1.0)", borderColor: "#9467bd", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
+          ]
+        },
+        options: commonOptions
+      });
+    }
+
+    function updateCharts(metrics, recentTraces, paper) {
+      if (!metrics || metrics.length === 0) return;
+
+      const labels = metrics.map(m => m.time.toFixed(1) + "s");
+
+      chartAttacker.data.labels = labels;
+      chartAttacker.data.datasets[0].data = metrics.map(m => m.conf_on);
+      chartAttacker.data.datasets[1].data = metrics.map(m => m.conf_off);
+      chartAttacker.data.datasets[2].data = metrics.map(() => paper.attacker_confidence_unshielded);
+      chartAttacker.data.datasets[3].data = metrics.map(() => paper.attacker_confidence_wasp);
+      chartAttacker.update('none');
+
+      chartLatency.data.labels = labels;
+      chartLatency.data.datasets[0].data = metrics.map(m => m.lat_hit);
+      chartLatency.data.datasets[1].data = metrics.map(m => m.lat_miss);
+      chartLatency.data.datasets[2].data = metrics.map(() => paper.latency_hit_ms);
+      chartLatency.data.datasets[3].data = metrics.map(() => paper.latency_miss_ms);
+      chartLatency.update('none');
+
+      chartDelivery.data.labels = labels;
+      chartDelivery.data.datasets[0].data = metrics.map(m => m.pdr_on);
+      chartDelivery.data.datasets[1].data = metrics.map(m => m.chr);
+      chartDelivery.data.datasets[2].data = metrics.map(() => paper.pdr_wasp);
+      chartDelivery.data.datasets[3].data = metrics.map(() => paper.chr);
+      chartDelivery.update('none');
+
+      chartOverhead.data.labels = labels;
+      chartOverhead.data.datasets[0].data = metrics.map(m => m.O_s);
+      chartOverhead.data.datasets[1].data = metrics.map(m => m.O_c);
+      chartOverhead.data.datasets[2].data = metrics.map(() => paper.shielding_overhead);
+      chartOverhead.data.datasets[3].data = metrics.map(() => paper.crypto_overhead);
+      chartOverhead.update('none');
+
+      if (recentTraces && recentTraces.length > 0) {
+        const sBuckets = [0, 0, 0, 0, 0];
+        const pBuckets = [0, 0, 0, 0, 0];
+        recentTraces.forEach(t => {
+          const sIdx = Math.min(4, Math.floor(t.shielding_intensity * 5));
+          const pIdx = Math.min(4, Math.floor(t.risk * 5));
+          sBuckets[sIdx]++;
+          pBuckets[pIdx]++;
+        });
+        chartHistogram.data.datasets[0].data = sBuckets;
+        chartHistogram.data.datasets[1].data = pBuckets;
+        chartHistogram.update('none');
+      }
+
+      chartDiversity.data.labels = labels;
+      chartDiversity.data.datasets[0].data = metrics.map(m => m.E_f);
+      chartDiversity.data.datasets[1].data = metrics.map(() => 1.0);
+      chartDiversity.update('none');
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      initTopologyD3();
+      initCharts();
+      connectWebSocket();
+    });
+  </script>
+</body>
+</html>
+
+

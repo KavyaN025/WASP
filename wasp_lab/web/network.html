@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASP Network Lab - Network Mode Master Controls</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+
+  <!-- Header Bar -->
+  <header>
+    <nav class="nav-center">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/network" class="nav-link active">Network Controls</a>
+      <a href="/router/r0" class="nav-link">Router Mode</a>
+    </nav>
+  </header>
+
+  <div class="container">
+
+    <!-- Master Run & World Controls -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Simulation Execution & World Mode Controls
+        </span>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span class="badge" style="background:#1b2432; color:#fff;">TIME: <span id="simTime">0.0</span>s</span>
+          <span id="simStatus" class="badge badge-stopped">STATUS: STOPPED</span>
+          <span id="wsStatus" class="badge badge-disconnected" style="display:none;">WS: DISCONNECTED</span>
+          <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);" id="actionFeedback">Ready</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+          
+          <div class="btn-group">
+            <button class="btn btn-primary" onclick="sendCommand('start')">[ START ]</button>
+            <button class="btn btn-warning" onclick="sendCommand('pause')">[ PAUSE ]</button>
+            <button class="btn" onclick="sendCommand('step')">[ STEP (0.1s) ]</button>
+            <button class="btn btn-danger" onclick="sendCommand('stop')">[ STOP ]</button>
+            <button class="btn" onclick="reseedPrompt()">[ RESEED ]</button>
+            <button class="btn" onclick="downloadReport()">[ SAVE REPORT ]</button>
+          </div>
+
+          <div style="display:flex; align-items:center; gap:8px;">
+            <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">ACTIVE WORLD:</span>
+            <button class="btn btn-primary" id="btnWorldBoth" onclick="setWorld('BOTH')">BOTH (LOCKSTEP)</button>
+            <button class="btn" id="btnWorldOn" onclick="setWorld('ON')">WASP ON</button>
+            <button class="btn" id="btnWorldOff" onclick="setWorld('OFF')">WASP OFF</button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Shielding Mechanisms Ablation Toggles (§3.1-3.3) -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          Shielding Mechanisms & Ablation Controls (Sec. 3.1 - 3.3)
+        </span>
+        <div class="btn-group">
+          <button class="btn" onclick="setPreset('full')">Full WASP (All 3)</button>
+          <button class="btn" onclick="setPreset('none')">Ablation Baseline (None)</button>
+          <button class="btn" onclick="setPreset('static')">Static Crypto Baseline</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="grid-3col">
+          
+          <!-- A-SHLD-1 -->
+          <div class="card" style="background:var(--bg-panel); border-color:var(--border-color); padding:10px 14px;">
+            <div class="toggle-row">
+              <div>
+                <strong style="display:block; font-family:var(--font-mono); font-size:12px;">A-SHLD-1: Name Obfuscation</strong>
+                <span style="font-size:10px; color:var(--text-muted);">Opaque Keyed Hash Token hides watchlisted name</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleNameObf" checked onchange="updateAblation()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div style="font-size:10px; color:var(--color-teal); margin-top:6px; font-family:var(--font-mono);">
+              Attacker Matcher: Plaintext miss -> Confidence drops (Eq. 48)
+            </div>
+          </div>
+
+          <!-- A-SHLD-2 -->
+          <div class="card" style="background:var(--bg-panel); border-color:var(--border-color); padding:10px 14px;">
+            <div class="toggle-row">
+              <div>
+                <strong style="display:block; font-family:var(--font-mono); font-size:12px;">A-SHLD-2: Timing Decorrelation</strong>
+                <span style="font-size:10px; color:var(--text-muted);">Adaptive delay Delta_i pushes packet outside W_corr</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleTimingDec" checked onchange="updateAblation()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div style="font-size:10px; color:var(--color-teal); margin-top:6px; font-family:var(--font-mono);">
+              Correlation Matcher: Inter-arrival shifted beyond window
+            </div>
+          </div>
+
+          <!-- A-SHLD-3 -->
+          <div class="card" style="background:var(--bg-panel); border-color:var(--border-color); padding:10px 14px;">
+            <div class="toggle-row">
+              <div>
+                <strong style="display:block; font-family:var(--font-mono); font-size:12px;">A-SHLD-3: Routing Diversity</strong>
+                <span style="font-size:10px; color:var(--text-muted);">Diversity R_i expands multipath equal-cost choices</span>
+              </div>
+              <label class="toggle-switch">
+                <input type="checkbox" id="toggleRoutingDiv" checked onchange="updateAblation()">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div style="font-size:10px; color:var(--color-teal); margin-top:6px; font-family:var(--font-mono);">
+              Forwarding Choice: Bypasses observation points
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+
+    <!-- Parameter Configuration Editors Grid -->
+    <div class="grid-2col">
+      
+      <!-- Topology Configuration -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Topology Editor</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">Network Architecture</span>
+        </div>
+        <div class="card-body">
+          <div class="grid-2col">
+            <div class="form-group">
+              <label class="form-label">Subscribers (n_subscribers)</label>
+              <input type="number" class="form-input" id="topSubs" value="3" min="1" max="10">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Routers (n_routers)</label>
+              <input type="number" class="form-input" id="topRouters" value="3" min="1" max="10">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Producers (n_producers)</label>
+              <input type="number" class="form-input" id="topProds" value="1" min="1" max="5">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Topology Pattern</label>
+              <select class="form-select" id="topPattern">
+                <option value="linear" selected>linear (Chain)</option>
+                <option value="mesh">mesh (Full Mesh)</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Link Latency (ms)</label>
+              <input type="number" class="form-input" id="topLatency" value="10.0" step="1.0">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Content Store Capacity</label>
+              <input type="number" class="form-input" id="topCsCap" value="100">
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width:100%;" onclick="applyTopology()">[ APPLY TOPOLOGY CONFIG ]</button>
+        </div>
+      </div>
+
+      <!-- Traffic Configuration -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Traffic Editor</span>
+          <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">Zipf Generation Stream</span>
+        </div>
+        <div class="card-body">
+          <div class="grid-2col">
+            <div class="form-group">
+              <label class="form-label">Zipf Exponent Alpha</label>
+              <input type="number" class="form-input" id="trafAlpha" value="1.2" step="0.1" min="1.01" max="2.0">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Catalog Size (Items)</label>
+              <input type="number" class="form-input" id="trafCatalog" value="1000" min="50">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mean Inter-Arrival (ms)</label>
+              <input type="number" class="form-input" id="trafInterArrival" value="50.0" step="5.0">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Watchlist Size (Items)</label>
+              <input type="number" class="form-input" id="trafWatchlist" value="20" min="5">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Simulation Duration (s)</label>
+              <input type="number" class="form-input" id="trafDuration" value="60.0" step="10.0">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Attacker Observation Routers</label>
+              <input type="text" class="form-input" id="attRouters" value="r1">
+            </div>
+          </div>
+          <button class="btn btn-primary" style="width:100%;" onclick="applyTraffic()">[ APPLY TRAFFIC & ATTACKER ]</button>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- WASP Mathematical Thresholds & Parameters -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">WASP Protocol Mathematical Parameters & Thresholds</span>
+        <span style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted);">Equations 1 - 48 Configuration</span>
+      </div>
+      <div class="card-body">
+        <div class="grid-3col">
+          
+          <div>
+            <div class="form-group">
+              <label class="form-label">Sliding Window Size (W)</label>
+              <input type="number" class="form-input" id="waspW" value="50">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Risk Threshold Low (tau_1)</label>
+              <input type="number" class="form-input" id="waspTau1" value="0.50" step="0.05">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Risk Threshold High (tau_2)</label>
+              <input type="number" class="form-input" id="waspTau2" value="0.65" step="0.05">
+            </div>
+          </div>
+
+          <div>
+            <div class="form-group">
+              <label class="form-label">Sigmoid Steepness (kappa)</label>
+              <input type="number" class="form-input" id="waspKappa" value="8.0" step="0.5">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Sigmoid Midpoint (tau)</label>
+              <input type="number" class="form-input" id="waspTau" value="0.50" step="0.05">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mode Protected (eta_1)</label>
+              <input type="number" class="form-input" id="waspEta1" value="0.40" step="0.05">
+            </div>
+            <div class="form-group">
+              <label class="form-label">Mode Shielded (eta_2)</label>
+              <input type="number" class="form-input" id="waspEta2" value="0.70" step="0.05">
+            </div>
+          </div>
+
+          <div>
+            <div class="form-group">
+              <label class="form-label">PES Weights (alpha / beta / gamma / delta)</label>
+              <div style="display:flex; gap:4px;">
+                <input type="number" class="form-input" id="waspAlpha" value="0.40" step="0.05" title="alpha (Frequency)">
+                <input type="number" class="form-input" id="waspBeta" value="0.20" step="0.05" title="beta (Cache)">
+                <input type="number" class="form-input" id="waspGamma" value="0.20" step="0.05" title="gamma (Interval)">
+                <input type="number" class="form-input" id="waspDelta" value="0.20" step="0.05" title="delta (Hops)">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Crypto Key Bounds (K_min / K_max bits)</label>
+              <div style="display:flex; gap:4px;">
+                <input type="number" class="form-input" id="waspKmin" value="128" step="32">
+                <input type="number" class="form-input" id="waspKmax" value="256" step="32">
+              </div>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Adaptive Delay Bounds (Delta_min / Delta_max ms)</label>
+              <div style="display:flex; gap:4px;">
+                <input type="number" class="form-input" id="waspDeltaMin" value="5.0" step="1.0">
+                <input type="number" class="form-input" id="waspDeltaMax" value="50.0" step="5.0">
+              </div>
+            </div>
+          </div>
+
+        </div>
+        <button class="btn btn-primary" style="width:100%; margin-top:8px;" onclick="applyWaspParams()">[ APPLY WASP MATHEMATICAL PARAMETERS ]</button>
+      </div>
+    </div>
+
+    <!-- Live Published State Snapshot JSON Viewer -->
+    <div class="card">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="16 18 22 12 16 6"/>
+            <polyline points="8 6 2 12 8 18"/>
+          </svg>
+          Live Published State Snapshot JSON (Evaluator Diagnostic Feed)
+        </span>
+        <div class="btn-group">
+          <label style="font-family:var(--font-mono); font-size:11px; display:flex; align-items:center; gap:4px; color:var(--text-muted);">
+            <input type="checkbox" id="chkAutoScroll" checked> Auto-Refresh
+          </label>
+          <button class="btn" onclick="copyJson()">[ COPY JSON ]</button>
+        </div>
+      </div>
+      <div class="card-body">
+        <pre class="json-viewer" id="jsonViewer">Connecting to simulation stream...</pre>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let ws = null;
+    let latestState = null;
+
+    function connectWebSocket() {
+      const loc = window.location;
+      const wsUri = (loc.protocol === "https:" ? "wss://" : "ws://") + loc.host + "/ws";
+      ws = new WebSocket(wsUri);
+
+      ws.onopen = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-connected";
+        badge.textContent = "WS: CONNECTED";
+      };
+
+      ws.onclose = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-disconnected";
+        badge.textContent = "WS: DISCONNECTED";
+        setTimeout(connectWebSocket, 1500);
+      };
+
+      ws.onerror = function() {
+        ws.close();
+      };
+
+      ws.onmessage = function(event) {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "state_update" || msg.type === "initial_state") {
+            handleStateUpdate(msg.data);
+          }
+        } catch(e) {}
+      };
+    }
+
+    function sendCommand(action, params = {}) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: action, ...params }));
+        setFeedback("Executed: " + action);
+      } else {
+        fetch("/" + action, { method: "POST" });
+        setFeedback("Executed HTTP: " + action);
+      }
+    }
+
+    function setFeedback(msg) {
+      document.getElementById("actionFeedback").textContent = msg;
+    }
+
+    function setWorld(world) {
+      document.getElementById("btnWorldBoth").className = world === "BOTH" ? "btn btn-primary" : "btn";
+      document.getElementById("btnWorldOn").className = world === "ON" ? "btn btn-primary" : "btn";
+      document.getElementById("btnWorldOff").className = world === "OFF" ? "btn btn-primary" : "btn";
+      sendCommand("set_world", { world: world });
+    }
+
+    function handleStateUpdate(data) {
+      latestState = data;
+
+      const simBadge = document.getElementById("simStatus");
+      simBadge.textContent = "STATUS: " + data.status;
+      if (data.status === "RUNNING") simBadge.className = "badge badge-running";
+      else if (data.status === "PAUSED") simBadge.className = "badge badge-paused";
+      else simBadge.className = "badge badge-stopped";
+
+      document.getElementById("simTime").textContent = data.sim_time.toFixed(1);
+
+      if (document.getElementById("chkAutoScroll").checked) {
+        document.getElementById("jsonViewer").textContent = JSON.stringify(data, null, 2);
+      }
+    }
+
+    function updateAblation() {
+      const nameVal = document.getElementById("toggleNameObf").checked;
+      const timingVal = document.getElementById("toggleTimingDec").checked;
+      const routingVal = document.getElementById("toggleRoutingDiv").checked;
+
+      sendCommand("set_ablation", { mechanism: "name_obfuscation", enabled: nameVal });
+      sendCommand("set_ablation", { mechanism: "timing_decorrelation", enabled: timingVal });
+      sendCommand("set_ablation", { mechanism: "routing_diversity", enabled: routingVal });
+
+      fetch("/network/ablation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name_obfuscation: nameVal,
+          timing_decorrelation: timingVal,
+          routing_diversity: routingVal
+        })
+      });
+      setFeedback("Ablation toggles updated");
+    }
+
+    function setPreset(type) {
+      if (type === "full") {
+        document.getElementById("toggleNameObf").checked = true;
+        document.getElementById("toggleTimingDec").checked = true;
+        document.getElementById("toggleRoutingDiv").checked = true;
+      } else if (type === "none") {
+        document.getElementById("toggleNameObf").checked = false;
+        document.getElementById("toggleTimingDec").checked = false;
+        document.getElementById("toggleRoutingDiv").checked = false;
+      } else if (type === "static") {
+        document.getElementById("toggleNameObf").checked = true;
+        document.getElementById("toggleTimingDec").checked = false;
+        document.getElementById("toggleRoutingDiv").checked = false;
+      }
+      updateAblation();
+    }
+
+    function applyTopology() {
+      const payload = {
+        num_subscribers: parseInt(document.getElementById("topSubs").value),
+        num_routers: parseInt(document.getElementById("topRouters").value),
+        num_producers: parseInt(document.getElementById("topProds").value),
+        pattern: document.getElementById("topPattern").value,
+        link_latency_ms: parseFloat(document.getElementById("topLatency").value),
+        cs_capacity: parseInt(document.getElementById("topCsCap").value),
+        scenario: "FULL_WASP"
+      };
+
+      fetch("/network/init", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          num_consumers: payload.num_subscribers,
+          num_routers: payload.num_routers,
+          num_producers: payload.num_producers,
+          pattern: payload.pattern,
+          link_latency_ms: payload.link_latency_ms,
+          cs_capacity: payload.cs_capacity,
+          scenario: payload.scenario
+        })
+      }).then(() => setFeedback("Topology updated successfully"));
+    }
+
+    function applyTraffic() {
+      const payload = {
+        zipf_alpha: parseFloat(document.getElementById("trafAlpha").value) || 1.2,
+        catalog_size: parseInt(document.getElementById("trafCatalog").value) || 1000,
+        mean_inter_arrival_ms: parseFloat(document.getElementById("trafInterArrival").value) || 50.0,
+        watchlist_size: parseInt(document.getElementById("trafWatchlist").value) || 20,
+        obs_router: document.getElementById("attRouters").value.trim() || "r1"
+      };
+
+      fetch("/traffic/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      })
+      .then(res => res.json())
+      .then(data => {
+        setFeedback("Traffic & Attacker parameters updated live!");
+      })
+      .catch(err => {
+        setFeedback("Failed to update traffic: " + err);
+      });
+    }
+
+    function applyWaspParams() {
+      const alpha = parseFloat(document.getElementById("waspAlpha").value);
+      const beta = parseFloat(document.getElementById("waspBeta").value);
+      const gamma = parseFloat(document.getElementById("waspGamma").value);
+      const delta = parseFloat(document.getElementById("waspDelta").value);
+
+      const sum = alpha + beta + gamma + delta;
+      if (Math.abs(sum - 1.0) > 0.01) {
+        alert("Warning: Weights alpha+beta+gamma+delta must sum to 1.0. Current sum: " + sum.toFixed(2));
+        return;
+      }
+
+      const payload = {
+        router_id: "all",
+        alpha: alpha,
+        beta: beta,
+        gamma: gamma,
+        delta: delta,
+        kappa: parseFloat(document.getElementById("waspKappa").value),
+        tau: parseFloat(document.getElementById("waspTau").value),
+        tau_1: parseFloat(document.getElementById("waspTau1").value),
+        tau_2: parseFloat(document.getElementById("waspTau2").value),
+        eta_1: parseFloat(document.getElementById("waspEta1").value),
+        eta_2: parseFloat(document.getElementById("waspEta2").value),
+        delta_min_ms: parseFloat(document.getElementById("waspDeltaMin").value),
+        delta_max_ms: parseFloat(document.getElementById("waspDeltaMax").value),
+        K_min: parseInt(document.getElementById("waspKmin").value),
+        K_max: parseInt(document.getElementById("waspKmax").value),
+        T_b: 0.05,
+        rho: 1.5
+      };
+
+      fetch("/wasp/params", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      }).then(() => setFeedback("WASP parameters saved"));
+    }
+
+    function reseedPrompt() {
+      const tSeed = prompt("Enter Traffic Seed (default 42):", "42");
+      const wSeed = prompt("Enter WASP Seed (default 1337):", "1337");
+      if (tSeed !== null && wSeed !== null) {
+        sendCommand("reseed", {
+          traffic_seed: parseInt(tSeed) || 42,
+          wasp_seed: parseInt(wSeed) || 1337
+        });
+      }
+    }
+
+    function downloadReport() {
+      window.open("/api/report", "_blank");
+    }
+
+    function copyJson() {
+      const content = document.getElementById("jsonViewer").textContent;
+      navigator.clipboard.writeText(content);
+      setFeedback("Snapshot JSON copied to clipboard");
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      connectWebSocket();
+    });
+  </script>
+</body>
+</html>

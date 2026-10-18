@@ -1,0 +1,79 @@
+{
+  "NORMAL_ICN": {
+    "scenario": "NORMAL_ICN",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111258.888449,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.0,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0
+  },
+  "WATCHLIST_ATTACK": {
+    "scenario": "WATCHLIST_ATTACK",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111258.9159358,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.2,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0
+  },
+  "STATIC_CRYPTO": {
+    "scenario": "STATIC_CRYPTO",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111258.9555032,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.0,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0.13930772187817464
+  },
+  "FULL_WASP": {
+    "scenario": "FULL_WASP",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111259.0030503,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.2,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0.13930733365854728
+  },
+  "WASP_NO_CRYPTO": {
+    "scenario": "WASP_NO_CRYPTO",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111259.0486515,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.2,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0.13930787716172555
+  },
+  "WASP_NO_SECURE_FORWARDING": {
+    "scenario": "WASP_NO_SECURE_FORWARDING",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111259.0949345,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.2,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0.13930897077685447
+  },
+  "WASP_NO_ADAPTIVE_SHIELD": {
+    "scenario": "WASP_NO_ADAPTIVE_SHIELD",
+    "PDR": 0.2512613521695257,
+    "ISR": 0.2512613521695257,
+    "CHR": 0.16870144284128746,
+    "average_latency": -1791111259.1436377,
+    "average_hops": 3.140562248995984,
+    "privacy_leakage": 0.0,
+    "shielded_traffic_percent": 0.0,
+    "average_privacy_risk": 0.13930601027556147
+  }
+}
