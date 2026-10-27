@@ -14,6 +14,8 @@
       <a href="/" class="nav-link">Dashboard</a>
       <a href="/network" class="nav-link">Network Controls</a>
       <a href="/router/r0" class="nav-link active">Router Mode</a>
+      <a href="/gan-comparison" class="nav-link">GAN Comparison</a>
+      <a href="/mesh-poisoning" class="nav-link">Mesh Poisoning</a>
     </nav>
   </header>
 
@@ -79,21 +81,13 @@
           
           <div style="flex:2; min-width:220px;">
             <label class="form-label">Content Name Prefix</label>
-            <input type="text" class="form-input" id="injectNameInput" value="/c/1" placeholder="/c/1">
+            <input type="text" class="form-input" id="injectNameInput" value="/cats/cat_image1.jpg" placeholder="/cats/cat_image1.jpg">
           </div>
 
           <div style="flex:2; min-width:220px;">
             <label class="form-label">Catalog Quick-Select</label>
             <select class="form-select" id="catalogSelect" onchange="onCatalogSelect(this.value)">
-              <option value="/c/1">/c/1 [WATCHLISTED - HIGH PRIVACY TARGET]</option>
-              <option value="/c/2">/c/2 [WATCHLISTED - TARGET]</option>
-              <option value="/c/3">/c/3 [WATCHLISTED - TARGET]</option>
-              <option value="/c/5">/c/5 [WATCHLISTED - TARGET]</option>
-              <option value="/c/10">/c/10 [WATCHLISTED - TARGET]</option>
-              <option value="/c/20">/c/20 [WATCHLISTED - TARGET]</option>
-              <option value="/c/50">/c/50 [NORMAL CATALOG ITEM]</option>
-              <option value="/c/100">/c/100 [NORMAL CATALOG ITEM]</option>
-              <option value="/c/500">/c/500 [NORMAL CATALOG ITEM]</option>
+              <option value="">Loading catalog...</option>
             </select>
           </div>
 
@@ -371,7 +365,33 @@
       document.getElementById("simTime").textContent = data.sim_time.toFixed(1);
 
       populateRouterDropdown(data.routers);
+      populateCatalogDropdown(data.watchlist, data.content_sample);
       refreshRouterView();
+    }
+
+    let catalogPopulated = false;
+
+    function populateCatalogDropdown(watchlist, contentSample) {
+      if (catalogPopulated) return;
+      const sel = document.getElementById("catalogSelect");
+      if (!sel || !watchlist) return;
+      sel.innerHTML = "";
+      watchlist.forEach(item => {
+        const opt = document.createElement("option");
+        opt.value = item.name;
+        opt.textContent = `${item.name} [WATCHLISTED]`;
+        sel.appendChild(opt);
+      });
+      (contentSample || []).forEach(name => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = `${name} [NORMAL CATALOG ITEM]`;
+        sel.appendChild(opt);
+      });
+      if (sel.options.length > 0) {
+        catalogPopulated = true;
+        document.getElementById("injectNameInput").value = sel.options[0].value;
+      }
     }
 
     function populateRouterDropdown(routers) {
@@ -525,11 +545,14 @@
           matchBadge = `<span class="badge badge-medium">TOKEN SHIELDED</span>`;
         }
 
+        const confField = "conf_" + (t.scheme || "wasp").toLowerCase();
+        const confVal = (t[confField] !== undefined) ? t[confField] : 0;
+
         tr.innerHTML = `
           <td>${t.time}s</td>
           <td><code style="color:${isShielded ? 'var(--color-teal)' : 'var(--color-danger)'};">${observedName}</code></td>
           <td>${matchBadge}</td>
-          <td class="text-teal">${t.conf_on.toFixed(3)}</td>
+          <td class="text-teal">${confVal.toFixed(3)}</td>
         `;
         body.appendChild(tr);
       });
@@ -555,7 +578,7 @@
     }
 
     function injectInterest() {
-      const name = document.getElementById("injectNameInput").value.trim() || "/c/1";
+      const name = document.getElementById("injectNameInput").value.trim() || "/cats/cat_image1.jpg";
       fetch("/inject", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

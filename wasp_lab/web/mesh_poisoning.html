@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASP Network Lab - Mesh Content Poisoning</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/static/lib/d3.v7.min.js"></script>
+</head>
+<body>
+
+  <!-- Header Bar -->
+  <header>
+    <nav class="nav-center">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/network" class="nav-link">Network Controls</a>
+      <a href="/router/r0" class="nav-link">Router Mode</a>
+      <a href="/gan-comparison" class="nav-link">GAN Comparison</a>
+      <a href="/mesh-poisoning" class="nav-link active">Mesh Poisoning</a>
+    </nav>
+  </header>
+
+  <div class="container">
+
+    <!-- Toolbar -->
+    <div class="card dashboard-toolbar" style="margin-bottom: 16px; padding: 12px 18px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">
+      <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+        <span class="badge" style="background:#1b2432; color:#fff; font-size:12px; padding:5px 10px;">TIME: <span id="simTime">0.0</span>s</span>
+        <span id="simStatus" class="badge badge-stopped" style="font-size:12px; padding:5px 10px;">STATUS: STOPPED</span>
+        <span id="wsStatus" class="badge badge-disconnected" style="display:none;">WS: DISCONNECTED</span>
+        <span class="badge" style="background:#6b21a8; color:#fff; font-size:12px; padding:5px 10px;">POISONED ENTRIES: <span id="poisonedCount">0</span></span>
+        <span class="badge" style="background:#991b1b; color:#fff; font-size:12px; padding:5px 10px;">FAKE CONTENT SERVED: <span id="fakeServedCount">0</span></span>
+      </div>
+      <div class="btn-group">
+        <button id="btnPlay" class="btn btn-primary" onclick="sendCommand('start')">[ START ]</button>
+        <button id="btnPause" class="btn btn-warning" onclick="sendCommand('pause')">[ PAUSE ]</button>
+        <button id="btnStep" class="btn" onclick="sendCommand('step')">[ STEP ]</button>
+        <button id="btnStop" class="btn btn-danger" onclick="sendCommand('stop')">[ STOP ]</button>
+      </div>
+    </div>
+
+    <!-- Attack Summary -->
+    <div class="card" style="margin-bottom: 16px; padding: 14px 18px;">
+      <p style="font-size:12.5px; color:var(--text-main); line-height:1.6; margin:0;">
+        Simulates a <strong>Content Poisoning Attack</strong>: WGAN-GP-generated fake images (FID 256.68, see
+        <a href="/gan-comparison">GAN Comparison</a>) get substituted into a router's Content Store
+        <strong>under the name of existing real, watchlisted content</strong> &mdash; exactly how a real attacker
+        would do it. No special-casing in WASP's routing or privacy math; a subscriber requesting that name
+        afterwards gets served the fake object through the <em>exact same</em> cache-hit path as genuine content,
+        unaware anything changed. WASP's shielding protects their <em>privacy</em>; it does nothing to stop this.
+      </p>
+    </div>
+
+    <!-- Poisoning Controls -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">Launch Content Poisoning Attack</span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+          <div>
+            <label class="form-label">Target Router</label>
+            <select class="form-select" id="poisonRouter"></select>
+          </div>
+          <div>
+            <label class="form-label">Category</label>
+            <select class="form-select" id="poisonCategory">
+              <option value="cats">cats</option>
+              <option value="dogs">dogs</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Count (from watchlist)</label>
+            <input type="number" class="form-input" id="poisonCount" value="2" min="1" max="10" style="width:70px;">
+          </div>
+          <div>
+            <button class="btn btn-danger" onclick="launchPoison()">[ POISON CACHE ]</button>
+          </div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);" id="poisonFeedback"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Anti-GAN Defense Controls -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">Anti-GAN Content Authenticity Scan</span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);" id="antiGanAvailability"></span>
+      </div>
+      <div class="card-body">
+        <div style="display:flex; gap:16px; align-items:flex-end; flex-wrap:wrap;">
+          <div>
+            <label class="form-label">Scan Router</label>
+            <select class="form-select" id="scanRouter"></select>
+          </div>
+          <div>
+            <button class="btn btn-primary" onclick="launchScan()">[ RUN ANTI-GAN SCAN ]</button>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <label class="form-label" style="margin:0;">Mitigation (auto-correct SUSPECT entries)</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="mitigationCheckbox" onchange="toggleMitigation()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);" id="scanFeedback"></div>
+          <div style="margin-left:auto; display:flex; gap:10px;">
+            <span class="badge badge-connected" style="font-size:11px;">DETECTION ACCURACY: <span id="detectionAccuracy">-</span></span>
+          </div>
+        </div>
+
+        <div class="table-container" style="margin-top:12px; max-height: 260px;" id="scanResultsContainer">
+          <table class="data-table" id="scanResultsTable">
+            <thead><tr><th>Content Name</th><th>Ground Truth</th><th>Detector Score (P real)</th><th>Verdict</th><th>Action</th></tr></thead>
+            <tbody id="scanResultsBody">
+              <tr><td colspan="5" class="text-center" style="color:var(--text-muted); padding:16px;">Run a scan to see results.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Topology + Event Feed -->
+    <div class="grid-main">
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Mesh Topology &mdash; Poisoned Routers Marked, Fake-Content Packets Highlighted</span>
+          <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); display:flex; gap:12px;">
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#444444"/></svg>Router</span>
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#9333ea"/></svg>Poisoned Router</span>
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><rect x="1" y="1" width="8" height="8" fill="#9333ea"/></svg>Fake Content Packet</span>
+          </div>
+        </div>
+        <div class="topology-container" id="topologyContainer">
+          <svg class="topology-svg" id="topologySvg"></svg>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">Poisoning Event Log</span>
+        </div>
+        <div class="table-container" style="max-height: 440px;">
+          <table class="data-table" id="poisonLogTable">
+            <thead><tr><th>Time</th><th>Router</th><th>Poisoned Name</th><th>Fake Source</th></tr></thead>
+            <tbody id="poisonLogBody">
+              <tr><td colspan="4" class="text-center" style="color:var(--text-muted); padding:20px;">No poisoning events yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Content Served Feed (real vs fake) -->
+    <div class="card" style="margin-top: 16px;">
+      <div class="card-header">
+        <span class="card-title">Live Content Served &mdash; Real vs. Fake</span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">Most recent first</span>
+      </div>
+      <div class="table-container" style="max-height: 320px;">
+        <table class="data-table" id="servedTable">
+          <thead><tr><th>Time</th><th>Subscriber</th><th>Content</th><th>Served From</th><th>Authenticity</th><th>Preview</th></tr></thead>
+          <tbody id="servedTableBody">
+            <tr><td colspan="6" class="text-center" style="color:var(--text-muted); padding:20px;">Awaiting traffic...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    let ws = null;
+    let latestState = null;
+    let fakeServedTotal = 0;
+    let seenTraceIds = new Set();
+
+    function connectWebSocket() {
+      const loc = window.location;
+      const wsUri = (loc.protocol === "https:" ? "wss://" : "ws://") + loc.host + "/ws";
+      ws = new WebSocket(wsUri);
+
+      ws.onopen = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-connected";
+        badge.textContent = "WS: CONNECTED";
+      };
+      ws.onclose = function() {
+        const badge = document.getElementById("wsStatus");
+        badge.className = "badge badge-disconnected";
+        badge.textContent = "WS: DISCONNECTED";
+        setTimeout(connectWebSocket, 1500);
+      };
+      ws.onerror = function() { ws.close(); };
+      ws.onmessage = function(event) {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === "state_update" || msg.type === "initial_state") {
+            handleStateUpdate(msg.data);
+          }
+        } catch(e) {}
+      };
+    }
+
+    function sendCommand(action, params = {}) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: action, ...params }));
+      } else {
+        fetch("/" + action, { method: "POST" });
+      }
+    }
+
+    function launchPoison() {
+      const router_id = document.getElementById("poisonRouter").value;
+      const category = document.getElementById("poisonCategory").value;
+      const count = parseInt(document.getElementById("poisonCount").value) || 2;
+      const feedback = document.getElementById("poisonFeedback");
+      feedback.textContent = "Poisoning...";
+
+      fetch("/attack/poison_cache", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ router_id, category, count })
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (res.status === "poisoned") {
+            feedback.textContent = `Poisoned ${res.poisoned.length} item(s) at ${res.router_id}`;
+          } else {
+            feedback.textContent = res.detail || "Failed";
+          }
+        })
+        .catch(err => { feedback.textContent = "Error: " + err; });
+    }
+
+    function populateRouterSelect(topology) {
+      [document.getElementById("poisonRouter"), document.getElementById("scanRouter")].forEach(sel => {
+        if (!topology || sel.options.length > 0) return;
+        topology.nodes.filter(n => n.type === "router").forEach(n => {
+          const opt = document.createElement("option");
+          opt.value = n.id;
+          opt.textContent = n.id.toUpperCase() + (n.is_compromised ? " (compromised)" : "");
+          sel.appendChild(opt);
+        });
+      });
+    }
+
+    let mitigationEnabled = false;
+
+    function toggleMitigation() {
+      mitigationEnabled = document.getElementById("mitigationCheckbox").checked;
+      fetch("/attack/set_mitigation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: mitigationEnabled })
+      });
+    }
+
+    function launchScan() {
+      const router_id = document.getElementById("scanRouter").value;
+      const feedback = document.getElementById("scanFeedback");
+      feedback.textContent = "Scanning...";
+
+      fetch("/attack/scan_router", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ router_id, mitigate: mitigationEnabled })
+      })
+        .then(r => r.json())
+        .then(res => {
+          if (res.status === "scanned") {
+            feedback.textContent = `Scanned ${res.results.length} item(s) at ${res.router_id}`;
+            renderScanResults(res.results);
+          } else {
+            feedback.textContent = res.detail || "Failed";
+          }
+        })
+        .catch(err => { feedback.textContent = "Error: " + err; });
+    }
+
+    function renderScanResults(results) {
+      const tbody = document.getElementById("scanResultsBody");
+      tbody.innerHTML = "";
+      results.forEach(r => {
+        const tr = document.createElement("tr");
+        const gtBadge = r.ground_truth_synthetic
+          ? `<span class="badge badge-danger">FAKE</span>`
+          : `<span class="badge badge-connected">REAL</span>`;
+        const verdictBadge = r.label === "SUSPECT"
+          ? `<span class="badge badge-high">SUSPECT</span>`
+          : `<span class="badge badge-low">VERIFIED</span>`;
+        const mismatch = r.label && ((r.label === "SUSPECT") !== r.ground_truth_synthetic);
+        tr.innerHTML = `
+          <td>${r.name}</td>
+          <td>${gtBadge}</td>
+          <td>${r.score !== null ? r.score.toFixed(4) : "-"}</td>
+          <td>${verdictBadge}${mismatch ? ' <span style="color:var(--color-danger); font-size:10px;">(misclassified)</span>' : ''}</td>
+          <td>${r.corrected ? '<span class="text-teal">restored real content</span>' : '-'}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+      updateDetectionAccuracy();
+    }
+
+    function updateDetectionAccuracy() {
+      if (!latestState || !latestState.scan_log) return;
+      let correct = 0, total = 0;
+      latestState.scan_log.forEach(ev => {
+        ev.results.forEach(r => {
+          if (r.label === null) return;
+          total += 1;
+          const predictedFake = r.label === "SUSPECT";
+          if (predictedFake === r.ground_truth_synthetic) correct += 1;
+        });
+      });
+      document.getElementById("detectionAccuracy").textContent = total > 0
+        ? `${(100 * correct / total).toFixed(1)}% (${correct}/${total})`
+        : "-";
+    }
+
+    function handleStateUpdate(data) {
+      latestState = data;
+
+      const simBadge = document.getElementById("simStatus");
+      simBadge.textContent = "STATUS: " + data.status;
+      if (data.status === "RUNNING") simBadge.className = "badge badge-running";
+      else if (data.status === "PAUSED") simBadge.className = "badge badge-paused";
+      else simBadge.className = "badge badge-stopped";
+      document.getElementById("simTime").textContent = data.sim_time.toFixed(1);
+
+      populateRouterSelect(data.topology);
+
+      let poisonedTotal = 0;
+      Object.values(data.routers || {}).forEach(r => { poisonedTotal += (r.poisoned_count || 0); });
+      document.getElementById("poisonedCount").textContent = poisonedTotal;
+
+      if (data.anti_gan) {
+        document.getElementById("antiGanAvailability").textContent = data.anti_gan.available
+          ? "DETECTOR LOADED" : "DETECTOR NOT TRAINED -- run gan_lab/anti_gan_train.py";
+        mitigationEnabled = data.anti_gan.mitigation_enabled;
+        document.getElementById("mitigationCheckbox").checked = mitigationEnabled;
+      }
+
+      renderTopology(data.topology, data.active_packets, data.routers);
+      renderPoisonLog(data.poison_log);
+      renderServedFeed(data.recent_traces);
+      updateDetectionAccuracy();
+    }
+
+    function renderPoisonLog(log) {
+      if (!log || log.length === 0) return;
+      const tbody = document.getElementById("poisonLogBody");
+      tbody.innerHTML = "";
+      log.slice().reverse().forEach(ev => {
+        ev.items.forEach(item => {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td>${ev.time}s</td>
+            <td><strong>${ev.router_id}</strong></td>
+            <td class="text-danger">${item.name}</td>
+            <td><code>${item.source_image}</code></td>
+          `;
+          tbody.appendChild(tr);
+        });
+      });
+    }
+
+    function renderServedFeed(traces) {
+      if (!traces || traces.length === 0) return;
+      const tbody = document.getElementById("servedTableBody");
+      tbody.innerHTML = "";
+      traces.slice(-25).reverse().forEach(t => {
+        if (!seenTraceIds.has(t.id) && t.served_synthetic) {
+          fakeServedTotal += 1;
+          seenTraceIds.add(t.id);
+          document.getElementById("fakeServedCount").textContent = fakeServedTotal;
+        } else {
+          seenTraceIds.add(t.id);
+        }
+
+        const tr = document.createElement("tr");
+        const authBadge = t.served_synthetic
+          ? `<span class="badge badge-danger">FAKE (GAN)</span>`
+          : (t.cache_hit ? `<span class="badge badge-connected">REAL</span>` : `<span class="badge">REAL (origin)</span>`);
+        const previewUrl = t.served_synthetic
+          ? null  // source_image not carried on trace directly; name still shown
+          : `/content${t.name}`;
+        const preview = t.served_synthetic
+          ? `<span style="color:var(--text-muted); font-size:10px;">fake content</span>`
+          : `<img src="${previewUrl}" style="width:28px; height:28px; object-fit:cover; border-radius:3px;" loading="lazy">`;
+
+        tr.innerHTML = `
+          <td>${t.time}s</td>
+          <td>${t.src}</td>
+          <td>${t.name}</td>
+          <td>${t.cache_node || "-"}</td>
+          <td>${authBadge}</td>
+          <td>${preview}</td>
+        `;
+        if (t.served_synthetic) tr.style.background = "rgba(147, 51, 234, 0.07)";
+        tbody.appendChild(tr);
+      });
+    }
+
+    // --- Topology rendering (ported from the main dashboard) ---
+    let d3Svg = null;
+    let nodeCoordinates = {};
+    let lastRenderedTopologyKey = "";
+
+    function initTopologyD3() {
+      d3Svg = d3.select("#topologySvg");
+    }
+
+    function renderTopology(topology, activePackets, routers) {
+      if (!d3Svg || !topology) return;
+      const nodes = topology.nodes || [];
+      const edges = topology.edges || [];
+      const topologyKey = nodes.map(n => n.id).join(",") + "|" + edges.length;
+
+      if (topologyKey !== lastRenderedTopologyKey) {
+        lastRenderedTopologyKey = topologyKey;
+        const containerW = document.getElementById("topologyContainer").clientWidth || 850;
+        const width = Math.max(800, containerW);
+        const height = 480;
+        d3Svg.attr("viewBox", `0 0 ${width} ${height}`);
+
+        const subs = nodes.filter(n => n.type === "subscriber");
+        const rtrs = nodes.filter(n => n.type === "router");
+        const prods = nodes.filter(n => n.type === "producer");
+
+        subs.forEach((n, i) => {
+          nodeCoordinates[n.id] = { x: 80, y: (height - 80) / (subs.length + 1) * (i + 1) + 40, r: 14 };
+        });
+        prods.forEach((n, i) => {
+          nodeCoordinates[n.id] = { x: width - 85, y: (height - 80) / (prods.length + 1) * (i + 1) + 40, r: 16 };
+        });
+
+        const isMesh = (topology.pattern === "mesh" || edges.length > rtrs.length + 2);
+        if (isMesh) {
+          const rx = (width - 360) * 0.42, ry = height * 0.32;
+          const cx = width / 2, cy = height / 2;
+          rtrs.forEach((n, i) => {
+            const angle = (2 * Math.PI / rtrs.length) * i - Math.PI / 2;
+            nodeCoordinates[n.id] = { x: cx + rx * Math.cos(angle), y: cy + ry * Math.sin(angle), r: 18 };
+          });
+        } else {
+          rtrs.forEach((n, i) => {
+            const step = rtrs.length > 1 ? (width - 360) / (rtrs.length - 1) : 0;
+            nodeCoordinates[n.id] = { x: 180 + i * step, y: height / 2, r: 18 };
+          });
+        }
+
+        let linkSelection = d3Svg.selectAll(".link-line").data(edges, d => d.src + "-" + d.dst);
+        linkSelection.exit().remove();
+        linkSelection.enter().append("line").attr("class", "link-line").merge(linkSelection)
+          .attr("x1", d => nodeCoordinates[d.src] ? nodeCoordinates[d.src].x : 0)
+          .attr("y1", d => nodeCoordinates[d.src] ? nodeCoordinates[d.src].y : 0)
+          .attr("x2", d => nodeCoordinates[d.dst] ? nodeCoordinates[d.dst].x : 0)
+          .attr("y2", d => nodeCoordinates[d.dst] ? nodeCoordinates[d.dst].y : 0);
+
+        let nodeSelection = d3Svg.selectAll(".node-group").data(nodes, d => d.id);
+        nodeSelection.exit().remove();
+        const nodeEnter = nodeSelection.enter().append("g").attr("class", "node-group")
+          .on("click", (evt, d) => { if (d.type === "router") window.location.href = "/router/" + d.id; });
+        nodeEnter.append("circle").attr("class", d => "node-circle node-" + d.type);
+        nodeEnter.append("text").attr("class", "node-label").attr("dy", 4)
+          .text(d => (d.type === "producer" && d.category) ? d.category.toUpperCase() : d.id.toUpperCase());
+
+        nodeSelection.merge(nodeEnter)
+          .attr("transform", d => { const c = nodeCoordinates[d.id] || {x:0,y:0}; return `translate(${c.x}, ${c.y})`; })
+          .select("circle").attr("r", d => nodeCoordinates[d.id] ? nodeCoordinates[d.id].r : 18);
+      }
+
+      // Poisoned-router rings
+      const poisonedRouterIds = Object.entries(routers || {}).filter(([id, r]) => r.poisoned_count > 0).map(([id]) => id);
+      let ringSelection = d3Svg.selectAll(".poison-ring").data(poisonedRouterIds, d => d);
+      ringSelection.exit().remove();
+      ringSelection.enter().append("circle").attr("class", "poison-ring")
+        .attr("fill", "none").attr("stroke", "#9333ea").attr("stroke-width", 2.5).attr("stroke-dasharray", "4 3")
+        .merge(ringSelection)
+        .attr("cx", d => nodeCoordinates[d] ? nodeCoordinates[d].x : 0)
+        .attr("cy", d => nodeCoordinates[d] ? nodeCoordinates[d].y : 0)
+        .attr("r", d => (nodeCoordinates[d] ? nodeCoordinates[d].r : 18) + 7);
+
+      // Packets
+      const packets = activePackets || [];
+      let packetSelection = d3Svg.selectAll(".packet-element").data(packets, d => d.id);
+      packetSelection.exit().remove();
+      packetSelection.enter().append("g").attr("class", "packet-element")
+        .each(function(d) {
+          d3.select(this).append("rect")
+            .attr("class", d.served_synthetic ? "packet-poisoned" : (d.type === "Interest" ? "packet-interest" : "packet-data"))
+            .attr("x", -5).attr("y", -5).attr("width", 10).attr("height", 10).attr("rx", 2)
+            .attr("fill", d.served_synthetic ? "#9333ea" : (d.type === "Interest" ? "#457b9d" : "#2a9d8f"));
+        })
+        .merge(packetSelection)
+        .attr("transform", d => {
+          const s = nodeCoordinates[d.src] || {x:0,y:0}, e = nodeCoordinates[d.dst] || {x:0,y:0};
+          return `translate(${s.x + (e.x - s.x) * d.progress}, ${s.y + (e.y - s.y) * d.progress})`;
+        })
+        .select("rect")
+        .attr("fill", d => d.served_synthetic ? "#9333ea" : (d.type === "Interest" ? "#457b9d" : "#2a9d8f"));
+    }
+
+    window.addEventListener("DOMContentLoaded", () => {
+      initTopologyD3();
+      connectWebSocket();
+    });
+  </script>
+</body>
+</html>

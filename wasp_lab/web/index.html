@@ -16,6 +16,8 @@
       <a href="/" class="nav-link active">Dashboard</a>
       <a href="/network" class="nav-link">Network Controls</a>
       <a href="/router/r0" class="nav-link">Router Mode</a>
+      <a href="/gan-comparison" class="nav-link">GAN Comparison</a>
+      <a href="/mesh-poisoning" class="nav-link">Mesh Poisoning</a>
     </nav>
   </header>
 
@@ -46,60 +48,58 @@
             <line x1="3" y1="9" x2="21" y2="9"/>
             <line x1="9" y1="21" x2="9" y2="9"/>
           </svg>
-          Two-World Lockstep Comparison & Paper Reference Benchmarks
+          Four-Scheme Comparison & Paper Reference Benchmarks
         </span>
         <div class="btn-group">
-          <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-right:4px;">VIEW WORLD:</span>
-          <button class="btn btn-primary" id="btnWorldBoth" onclick="setWorld('BOTH')">BOTH</button>
-          <button class="btn" id="btnWorldOn" onclick="setWorld('ON')">WASP ON</button>
-          <button class="btn" id="btnWorldOff" onclick="setWorld('OFF')">WASP OFF</button>
+          <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-right:4px;">ACTIVE SCHEME:</span>
+          <button class="btn" id="btnSchemeNormal" onclick="setScheme('NORMAL')">NORMAL</button>
+          <button class="btn" id="btnSchemeAttack" onclick="setScheme('ATTACK')">ATTACK (UNSHIELDED)</button>
+          <button class="btn" id="btnSchemeStatic" onclick="setScheme('STATIC_CRYPTO')">STATIC CRYPTO</button>
+          <button class="btn btn-primary" id="btnSchemeWasp" onclick="setScheme('WASP')">FULL WASP</button>
         </div>
       </div>
       <table class="comparison-table">
         <thead>
           <tr>
             <th>METRIC</th>
-            <th class="col-wasp-on">WASP ON (PROTECTED)</th>
-            <th class="col-wasp-off">WASP OFF (UNSHIELDED)</th>
-            <th class="col-paper">PAPER-REPORTED REFERENCE</th>
-            <th>STATUS</th>
+            <th class="col-normal">NORMAL (A)</th>
+            <th class="col-attack">ATTACK (C)</th>
+            <th class="col-static">STATIC CRYPTO (B)</th>
+            <th class="col-wasp-on">FULL WASP (D)</th>
+            <th class="col-paper">PAPER REFERENCE</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td>Mean Attacker Confidence (P_L)</td>
-            <td id="compConfOn" class="col-wasp-on">0.180</td>
-            <td id="compConfOff" class="col-wasp-off">0.850</td>
-            <td class="col-paper">0.18 (WASP) / 0.85 (Unshielded)</td>
-            <td><span class="badge badge-connected">[OK] Suppressed</span></td>
+            <td id="compConfNormal" class="col-normal">0.100</td>
+            <td id="compConfAttack" class="col-attack">0.850</td>
+            <td id="compConfStatic" class="col-static">0.400</td>
+            <td id="compConfWasp" class="col-wasp-on">0.180</td>
+            <td class="col-paper">0.85 (Unshielded) / 0.18 (WASP)</td>
           </tr>
           <tr>
-            <td>Packet Delivery Ratio (PDR)</td>
-            <td id="compPdrOn" class="col-wasp-on">0.940</td>
-            <td id="compPdrOff" class="col-wasp-off">0.960</td>
-            <td class="col-paper">0.94 (WASP) / 0.87 (Static Crypto)</td>
-            <td><span class="badge badge-connected">[OK] Nominal</span></td>
+            <td>Packet Delivery Ratio (PDR, paper ref.)</td>
+            <td id="compPdrNormal" class="col-normal">0.980</td>
+            <td id="compPdrAttack" class="col-attack">0.650</td>
+            <td id="compPdrStatic" class="col-static">0.870</td>
+            <td id="compPdrWasp" class="col-wasp-on">0.940</td>
+            <td class="col-paper">PA &gt; PD &gt; PB &raquo; PC</td>
           </tr>
           <tr>
-            <td>Cache Hit Ratio (CHR)</td>
-            <td id="compChr" class="col-wasp-on">0.350</td>
-            <td class="col-wasp-off">0.350</td>
+            <td>Cache Hit Ratio (CHR, live)</td>
+            <td colspan="4" id="compChr" style="text-align:center;">0.350</td>
             <td class="col-paper">0.350</td>
-            <td><span class="badge badge-connected">[OK] Expected</span></td>
           </tr>
           <tr>
-            <td>Mean Latency (Hit / Miss)</td>
-            <td id="compLat" class="col-wasp-on">5.0ms / 27.5ms</td>
-            <td class="col-wasp-off">5.0ms / 20.0ms</td>
+            <td>Mean Latency (Hit / Miss, live)</td>
+            <td colspan="4" id="compLat" style="text-align:center;">5.0ms / 27.5ms</td>
             <td class="col-paper">Hit: 5.0ms / Miss: 28.0ms</td>
-            <td><span class="badge badge-connected">[OK] RTT + Overhead</span></td>
           </tr>
           <tr>
-            <td>Shielding & Crypto Overhead (O_s, O_c)</td>
-            <td id="compOverhead" class="col-wasp-on">O_s=0.12, O_c=0.08</td>
-            <td class="col-wasp-off">0.00 / 0.00</td>
+            <td>Shielding & Crypto Overhead (O_s, O_c, live, active scheme only)</td>
+            <td colspan="4" id="compOverhead" style="text-align:center;">O_s=0.12, O_c=0.08</td>
             <td class="col-paper">O_s=0.12, O_c=0.08</td>
-            <td><span class="badge badge-connected">[OK] Adaptive</span></td>
           </tr>
         </tbody>
       </table>
@@ -125,7 +125,7 @@
             <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#457b9d"/></svg>Subscribers</span>
             <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#444444"/></svg>Routers</span>
             <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><polygon points="5,1 9,9 1,9" fill="#555555"/></svg>Observation Point</span>
-            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#000000"/></svg>Producer</span>
+            <span><svg width="10" height="10" style="vertical-align:middle; margin-right:3px;"><circle cx="5" cy="5" r="4" fill="#000000"/></svg>Publisher (by category, e.g. cats/dogs)</span>
           </div>
         </div>
         <div class="topology-container" id="topologyContainer">
@@ -300,8 +300,10 @@
             </select>
           </div>
           <div style="font-family:var(--font-mono); font-size:11px; display:flex; gap:10px;">
-            <span><span style="color:var(--color-teal);">&#9632;</span> WASP ON</span>
-            <span><span style="color:var(--color-orange);">&#9632;</span> WASP OFF</span>
+            <span><span style="color:#6b7280;">&#9632;</span> Normal</span>
+            <span><span style="color:var(--color-orange);">&#9632;</span> Attack</span>
+            <span><span style="color:#9467bd;">&#9632;</span> Static Crypto</span>
+            <span><span style="color:var(--color-teal);">&#9632;</span> WASP</span>
           </div>
         </div>
       </div>
@@ -420,43 +422,19 @@
       }
     }
 
-    let currentWorld = "BOTH";
+    let currentScheme = "WASP";
 
-    function applyWorldFilterToTable(world) {
-      const onCols = document.querySelectorAll(".col-wasp-on");
-      const offCols = document.querySelectorAll(".col-wasp-off");
-      
-      if (world === "ON") {
-        onCols.forEach(el => {
-          el.style.display = "";
-          el.style.backgroundColor = "rgba(3, 105, 161, 0.08)";
-        });
-        offCols.forEach(el => el.style.display = "none");
-      } else if (world === "OFF") {
-        onCols.forEach(el => el.style.display = "none");
-        offCols.forEach(el => {
-          el.style.display = "";
-          el.style.backgroundColor = "rgba(194, 65, 12, 0.08)";
-        });
-      } else { // BOTH
-        onCols.forEach(el => {
-          el.style.display = "";
-          el.style.backgroundColor = "";
-        });
-        offCols.forEach(el => {
-          el.style.display = "";
-          el.style.backgroundColor = "";
-        });
-      }
+    function syncSchemeButtons(scheme) {
+      currentScheme = scheme;
+      document.getElementById("btnSchemeNormal").className = scheme === "NORMAL" ? "btn btn-primary" : "btn";
+      document.getElementById("btnSchemeAttack").className = scheme === "ATTACK" ? "btn btn-primary" : "btn";
+      document.getElementById("btnSchemeStatic").className = scheme === "STATIC_CRYPTO" ? "btn btn-primary" : "btn";
+      document.getElementById("btnSchemeWasp").className = scheme === "WASP" ? "btn btn-primary" : "btn";
     }
 
-    function setWorld(world) {
-      currentWorld = world;
-      document.getElementById("btnWorldBoth").className = world === "BOTH" ? "btn btn-primary" : "btn";
-      document.getElementById("btnWorldOn").className = world === "ON" ? "btn btn-primary" : "btn";
-      document.getElementById("btnWorldOff").className = world === "OFF" ? "btn btn-primary" : "btn";
-      applyWorldFilterToTable(world);
-      sendCommand("set_world", { world: world });
+    function setScheme(scheme) {
+      syncSchemeButtons(scheme);
+      sendCommand("set_scheme", { scheme: scheme });
     }
 
     let lastChartUpdateTime = 0;
@@ -479,16 +457,18 @@
 
       if (data.metrics && data.metrics.length > 0) {
         const lastM = data.metrics[data.metrics.length - 1];
-        if (document.getElementById("compConfOn")) document.getElementById("compConfOn").textContent = lastM.conf_on.toFixed(3);
-        if (document.getElementById("compConfOff")) document.getElementById("compConfOff").textContent = lastM.conf_off.toFixed(3);
-        if (document.getElementById("compPdrOn")) document.getElementById("compPdrOn").textContent = lastM.pdr_on.toFixed(3);
-        if (document.getElementById("compPdrOff")) document.getElementById("compPdrOff").textContent = lastM.pdr_off.toFixed(3);
+        if (document.getElementById("compConfNormal")) document.getElementById("compConfNormal").textContent = lastM.conf_normal.toFixed(3);
+        if (document.getElementById("compConfAttack")) document.getElementById("compConfAttack").textContent = lastM.conf_attack.toFixed(3);
+        if (document.getElementById("compConfStatic")) document.getElementById("compConfStatic").textContent = lastM.conf_static_crypto.toFixed(3);
+        if (document.getElementById("compConfWasp")) document.getElementById("compConfWasp").textContent = lastM.conf_wasp.toFixed(3);
         if (document.getElementById("compChr")) document.getElementById("compChr").textContent = lastM.chr.toFixed(3);
         if (document.getElementById("compLat")) document.getElementById("compLat").textContent = lastM.lat_hit.toFixed(1) + "ms / " + lastM.lat_miss.toFixed(1) + "ms";
-        if (document.getElementById("compOverhead")) document.getElementById("compOverhead").textContent = "O_s=" + lastM.O_s.toFixed(3) + ", O_c=" + lastM.O_c.toFixed(3);
+        if (document.getElementById("compOverhead")) document.getElementById("compOverhead").textContent = "O_s=" + lastM.O_s.toFixed(3) + ", O_c=" + lastM.O_c.toFixed(3) + " (" + lastM.scheme + ")";
       }
 
-      applyWorldFilterToTable(currentWorld);
+      if (data.scheme && data.scheme !== currentScheme) {
+        syncSchemeButtons(data.scheme);
+      }
 
       // Packet animation runs on every frame for fluid movement
       renderTopology(data.topology, data.active_packets, data.routers);
@@ -691,7 +671,7 @@
         nodeEnter.append("text")
           .attr("class", "node-label")
           .attr("dy", 4)
-          .text(d => d.id.toUpperCase());
+          .text(d => (d.type === "producer" && d.category) ? d.category.toUpperCase() : d.id.toUpperCase());
 
         nodeSelection.merge(nodeEnter)
           .attr("transform", d => {
@@ -841,7 +821,7 @@
         watchlist.forEach(item => {
           const opt = document.createElement("option");
           opt.value = item.name;
-          opt.textContent = `${item.name} (Conf: ON=${item.conf_on.toFixed(2)}, OFF=${item.conf_off.toFixed(2)})`;
+          opt.textContent = `${item.name} (Attack=${item.conf_attack.toFixed(2)}, WASP=${item.conf_wasp.toFixed(2)})`;
           if (item.name === currentVal) opt.selected = true;
           select.appendChild(opt);
         });
@@ -850,9 +830,13 @@
       currentSelectedTarget = select.value || watchlist[0].name;
       const selectedItem = watchlist.find(item => item.name === currentSelectedTarget) || watchlist[0];
 
-      const pctOn = Math.min(100, selectedItem.conf_on * 100);
-      const pctOff = Math.min(100, selectedItem.conf_off * 100);
-      const isShielded = selectedItem.conf_on < selectedItem.conf_off;
+      const bars = [
+        { label: "Normal (No Adversary)", key: "conf_normal", color: "#6b7280" },
+        { label: "Attack (Unshielded Plaintext)", key: "conf_attack", color: "var(--color-orange)" },
+        { label: "Static Crypto (Fixed-Key)", key: "conf_static_crypto", color: "#9467bd" },
+        { label: "Full WASP (Adaptive)", key: "conf_wasp", color: "var(--color-teal)" }
+      ];
+      const isShielded = selectedItem.conf_wasp < selectedItem.conf_attack;
 
       container.innerHTML = `
         <div class="watchlist-card" style="max-width: 650px; margin: 0 auto; padding: 18px; border: 1.5px solid var(--border-color); border-radius: 8px; background: #fafafa;">
@@ -862,33 +846,29 @@
               <span style="font-family:var(--font-mono); font-size:11px; margin-left:8px; color:var(--text-muted);">[Target Watchlist Item]</span>
             </div>
             <span class="badge ${isShielded ? 'badge-connected' : 'badge-danger'}" style="font-size:11px; padding:4px 8px;">
-              ${isShielded ? '[SHIELDED - LOW LEAKAGE]' : '[EXPOSED - HIGH LEAKAGE]'}
+              ${isShielded ? '[WASP SUPPRESSES LEAKAGE]' : '[EXPOSED - HIGH LEAKAGE]'}
             </span>
           </div>
 
           <div class="conf-bar-group" style="display:flex; flex-direction:column; gap:12px;">
-            <div>
-              <div class="conf-bar-label" style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:12px; margin-bottom:4px;">
-                <span style="color:var(--color-teal); font-weight:600;">WASP ON (Adaptive Opaque Tokens & Delay):</span>
-                <span style="font-weight:700; color:var(--color-teal);">${selectedItem.conf_on.toFixed(3)} (${pctOn.toFixed(1)}%)</span>
-              </div>
-              <div class="conf-bar-track" style="height:12px; background:#e2e8f0; border-radius:6px; overflow:hidden;">
-                <div class="conf-bar-fill-on" style="width: ${pctOn}%; height:100%; background:var(--color-teal); border-radius:6px; transition: width 0.3s ease;"></div>
-              </div>
-            </div>
-
-            <div>
-              <div class="conf-bar-label" style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:12px; margin-bottom:4px;">
-                <span style="color:var(--color-orange); font-weight:600;">WASP OFF (Unshielded Plaintext Traffic):</span>
-                <span style="font-weight:700; color:var(--color-orange);">${selectedItem.conf_off.toFixed(3)} (${pctOff.toFixed(1)}%)</span>
-              </div>
-              <div class="conf-bar-track" style="height:12px; background:#e2e8f0; border-radius:6px; overflow:hidden;">
-                <div class="conf-bar-fill-off" style="width: ${pctOff}%; height:100%; background:var(--color-orange); border-radius:6px; transition: width 0.3s ease;"></div>
-              </div>
-            </div>
+            ${bars.map(b => {
+              const val = selectedItem[b.key];
+              const pct = Math.min(100, val * 100);
+              return `
+                <div>
+                  <div class="conf-bar-label" style="display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:12px; margin-bottom:4px;">
+                    <span style="color:${b.color}; font-weight:600;">${b.label}:</span>
+                    <span style="font-weight:700; color:${b.color};">${val.toFixed(3)} (${pct.toFixed(1)}%)</span>
+                  </div>
+                  <div class="conf-bar-track" style="height:12px; background:#e2e8f0; border-radius:6px; overflow:hidden;">
+                    <div style="width: ${pct}%; height:100%; background:${b.color}; border-radius:6px; transition: width 0.3s ease;"></div>
+                  </div>
+                </div>
+              `;
+            }).join("")}
 
             <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted); margin-top:6px; padding-top:10px; border-top:1px dashed var(--border-color); display:flex; justify-content:space-between;">
-              <span>Attacker Posterior Suppression: <strong>${((selectedItem.conf_off - selectedItem.conf_on) * 100).toFixed(1)}% reduction</strong></span>
+              <span>WASP vs Attack Suppression: <strong>${((selectedItem.conf_attack - selectedItem.conf_wasp) * 100).toFixed(1)}% reduction</strong></span>
               <span>Prior Beta: &alpha;=1, &beta;=9</span>
             </div>
           </div>
@@ -915,8 +895,10 @@
         data: {
           labels: [],
           datasets: [
-            { label: "WASP ON (Live)", borderColor: "#1f77b4", backgroundColor: "#1f77b4", data: [], borderWidth: 2, pointRadius: 0 },
-            { label: "WASP OFF (Live)", borderColor: "#ff7f0e", backgroundColor: "#ff7f0e", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Normal (Live)", borderColor: "#6b7280", backgroundColor: "#6b7280", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Attack (Live)", borderColor: "#ff7f0e", backgroundColor: "#ff7f0e", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "Static Crypto (Live)", borderColor: "#9467bd", backgroundColor: "#9467bd", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "WASP (Live)", borderColor: "#1f77b4", backgroundColor: "#1f77b4", data: [], borderWidth: 2, pointRadius: 0 },
             { label: "Paper Unshielded (0.85)", borderColor: "#ff7f0e", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 },
             { label: "Paper WASP (0.18)", borderColor: "#1f77b4", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
           ]
@@ -943,7 +925,7 @@
         data: {
           labels: [],
           datasets: [
-            { label: "PDR WASP (Live)", borderColor: "#1f77b4", data: [], borderWidth: 2, pointRadius: 0 },
+            { label: "PDR Active Scheme (Live)", borderColor: "#1f77b4", data: [], borderWidth: 2, pointRadius: 0 },
             { label: "CHR (Live)", borderColor: "#9467bd", data: [], borderWidth: 2, pointRadius: 0 },
             { label: "Paper PDR (0.94)", borderColor: "#1f77b4", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 },
             { label: "Paper CHR (0.35)", borderColor: "#9467bd", borderDash: [4, 4], data: [], borderWidth: 1, pointRadius: 0 }
@@ -997,10 +979,12 @@
       const labels = metrics.map(m => m.time.toFixed(1) + "s");
 
       chartAttacker.data.labels = labels;
-      chartAttacker.data.datasets[0].data = metrics.map(m => m.conf_on);
-      chartAttacker.data.datasets[1].data = metrics.map(m => m.conf_off);
-      chartAttacker.data.datasets[2].data = metrics.map(() => paper.attacker_confidence_unshielded);
-      chartAttacker.data.datasets[3].data = metrics.map(() => paper.attacker_confidence_wasp);
+      chartAttacker.data.datasets[0].data = metrics.map(m => m.conf_normal);
+      chartAttacker.data.datasets[1].data = metrics.map(m => m.conf_attack);
+      chartAttacker.data.datasets[2].data = metrics.map(m => m.conf_static_crypto);
+      chartAttacker.data.datasets[3].data = metrics.map(m => m.conf_wasp);
+      chartAttacker.data.datasets[4].data = metrics.map(() => paper.attacker_confidence_unshielded);
+      chartAttacker.data.datasets[5].data = metrics.map(() => paper.attacker_confidence_wasp);
       chartAttacker.update('none');
 
       chartLatency.data.labels = labels;
@@ -1011,7 +995,7 @@
       chartLatency.update('none');
 
       chartDelivery.data.labels = labels;
-      chartDelivery.data.datasets[0].data = metrics.map(m => m.pdr_on);
+      chartDelivery.data.datasets[0].data = metrics.map(m => m.pdr_active);
       chartDelivery.data.datasets[1].data = metrics.map(m => m.chr);
       chartDelivery.data.datasets[2].data = metrics.map(() => paper.pdr_wasp);
       chartDelivery.data.datasets[3].data = metrics.map(() => paper.chr);

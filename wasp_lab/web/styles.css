@@ -140,6 +140,15 @@ nav, .nav-center {
 .badge-low { background: #dcfce7; color: #15803d; border: 1px solid #86efac; }
 .badge-medium { background: #fef3c7; color: #b45309; border: 1px solid #fde68a; }
 .badge-high { background: #fee2e2; color: #b91c1c; border: 1px solid #fca5a5; }
+.badge-danger { background: #fee2e2; color: var(--color-danger); border: 1px solid #fca5a5; }
+
+/* Text color utilities -- used across router.html/index.html/mesh_poisoning.html
+   but were never actually defined; browsers silently ignored the class names. */
+.text-danger { color: var(--color-danger); }
+.text-warning { color: var(--color-warning); }
+.text-teal { color: var(--color-teal); }
+.text-orange { color: var(--color-orange); }
+.text-muted { color: var(--text-muted); }
 
 /* Main Container Layout */
 .container {
@@ -183,7 +192,7 @@ nav, .nav-center {
   padding: 14px;
 }
 
-/* Two-World Comparison Table */
+/* Four-Scheme Comparison Table */
 .comparison-table {
   width: 100%;
   border-collapse: collapse;
@@ -206,8 +215,10 @@ nav, .nav-center {
   border-bottom: 2px solid var(--border-active);
 }
 
+.col-normal { color: #6b7280; font-weight: 700; }
+.col-attack { color: var(--color-warning); font-weight: 700; }
+.col-static { color: #9467bd; font-weight: 700; }
 .col-wasp-on { color: var(--color-primary); font-weight: 700; }
-.col-wasp-off { color: var(--color-warning); font-weight: 700; }
 .col-paper { color: var(--text-muted); font-style: italic; }
 
 /* Grid Structures */
@@ -738,4 +749,61 @@ input:checked + .toggle-slider:before {
   border-top: 1px solid var(--border-color);
   font-family: var(--font-mono);
   font-size: 11px;
+}
+
+/* GAN Comparison Page */
+.gan-sample-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 14px;
+}
+
+.gan-sample-item {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.gan-sample-item img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gan-sample-caption {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.gan-reference-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+
+.gan-reference-item {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fafafa;
+}
+
+.gan-reference-item img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.gan-reference-caption {
+  padding: 6px 10px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  text-align: center;
+  border-top: 1px solid var(--border-color);
 }

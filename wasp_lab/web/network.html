@@ -14,19 +14,21 @@
       <a href="/" class="nav-link">Dashboard</a>
       <a href="/network" class="nav-link active">Network Controls</a>
       <a href="/router/r0" class="nav-link">Router Mode</a>
+      <a href="/gan-comparison" class="nav-link">GAN Comparison</a>
+      <a href="/mesh-poisoning" class="nav-link">Mesh Poisoning</a>
     </nav>
   </header>
 
   <div class="container">
 
-    <!-- Master Run & World Controls -->
+    <!-- Master Run & Scheme Controls -->
     <div class="card" style="margin-bottom: 16px;">
       <div class="card-header">
         <span class="card-title">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <polygon points="5 3 19 12 5 21 5 3"/>
           </svg>
-          Simulation Execution & World Mode Controls
+          Simulation Execution & Scheme Controls
         </span>
         <div style="display:flex; align-items:center; gap:10px;">
           <span class="badge" style="background:#1b2432; color:#fff;">TIME: <span id="simTime">0.0</span>s</span>
@@ -48,10 +50,11 @@
           </div>
 
           <div style="display:flex; align-items:center; gap:8px;">
-            <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">ACTIVE WORLD:</span>
-            <button class="btn btn-primary" id="btnWorldBoth" onclick="setWorld('BOTH')">BOTH (LOCKSTEP)</button>
-            <button class="btn" id="btnWorldOn" onclick="setWorld('ON')">WASP ON</button>
-            <button class="btn" id="btnWorldOff" onclick="setWorld('OFF')">WASP OFF</button>
+            <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">ACTIVE SCHEME:</span>
+            <button class="btn" id="btnSchemeNormal" onclick="setScheme('NORMAL')">NORMAL</button>
+            <button class="btn" id="btnSchemeAttack" onclick="setScheme('ATTACK')">ATTACK</button>
+            <button class="btn" id="btnSchemeStatic" onclick="setScheme('STATIC_CRYPTO')">STATIC CRYPTO</button>
+            <button class="btn btn-primary" id="btnSchemeWasp" onclick="setScheme('WASP')">FULL WASP</button>
           </div>
 
         </div>
@@ -66,6 +69,7 @@
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
           </svg>
           Shielding Mechanisms & Ablation Controls (Sec. 3.1 - 3.3)
+          <span style="font-size:10px; color:var(--text-muted); font-weight:400;">&mdash; apply only while ACTIVE SCHEME = FULL WASP</span>
         </span>
         <div class="btn-group">
           <button class="btn" onclick="setPreset('full')">Full WASP (All 3)</button>
@@ -151,8 +155,8 @@
               <input type="number" class="form-input" id="topRouters" value="3" min="1" max="10">
             </div>
             <div class="form-group">
-              <label class="form-label">Producers (n_producers)</label>
-              <input type="number" class="form-input" id="topProds" value="1" min="1" max="5">
+              <label class="form-label">Publishers / categories (n_producers)</label>
+              <input type="number" class="form-input" id="topProds" value="2" min="1" max="5">
             </div>
             <div class="form-group">
               <label class="form-label">Topology Pattern</label>
@@ -187,8 +191,8 @@
               <input type="number" class="form-input" id="trafAlpha" value="1.2" step="0.1" min="1.01" max="2.0">
             </div>
             <div class="form-group">
-              <label class="form-label">Catalog Size (Items)</label>
-              <input type="number" class="form-input" id="trafCatalog" value="1000" min="50">
+              <label class="form-label">Catalog Size (ignored &mdash; real content folders set pool size)</label>
+              <input type="number" class="form-input" id="trafCatalog" value="1000" min="50" disabled>
             </div>
             <div class="form-group">
               <label class="form-label">Mean Inter-Arrival (ms)</label>
@@ -361,11 +365,12 @@
       document.getElementById("actionFeedback").textContent = msg;
     }
 
-    function setWorld(world) {
-      document.getElementById("btnWorldBoth").className = world === "BOTH" ? "btn btn-primary" : "btn";
-      document.getElementById("btnWorldOn").className = world === "ON" ? "btn btn-primary" : "btn";
-      document.getElementById("btnWorldOff").className = world === "OFF" ? "btn btn-primary" : "btn";
-      sendCommand("set_world", { world: world });
+    function setScheme(scheme) {
+      document.getElementById("btnSchemeNormal").className = scheme === "NORMAL" ? "btn btn-primary" : "btn";
+      document.getElementById("btnSchemeAttack").className = scheme === "ATTACK" ? "btn btn-primary" : "btn";
+      document.getElementById("btnSchemeStatic").className = scheme === "STATIC_CRYPTO" ? "btn btn-primary" : "btn";
+      document.getElementById("btnSchemeWasp").className = scheme === "WASP" ? "btn btn-primary" : "btn";
+      sendCommand("set_scheme", { scheme: scheme });
     }
 
     function handleStateUpdate(data) {
@@ -378,6 +383,13 @@
       else simBadge.className = "badge badge-stopped";
 
       document.getElementById("simTime").textContent = data.sim_time.toFixed(1);
+
+      if (data.scheme) {
+        document.getElementById("btnSchemeNormal").className = data.scheme === "NORMAL" ? "btn btn-primary" : "btn";
+        document.getElementById("btnSchemeAttack").className = data.scheme === "ATTACK" ? "btn btn-primary" : "btn";
+        document.getElementById("btnSchemeStatic").className = data.scheme === "STATIC_CRYPTO" ? "btn btn-primary" : "btn";
+        document.getElementById("btnSchemeWasp").className = data.scheme === "WASP" ? "btn btn-primary" : "btn";
+      }
 
       if (document.getElementById("chkAutoScroll").checked) {
         document.getElementById("jsonViewer").textContent = JSON.stringify(data, null, 2);

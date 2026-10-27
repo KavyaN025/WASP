@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WASP Network Lab - GAN Content Authenticity Comparison</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/static/lib/chart.min.js"></script>
+</head>
+<body>
+
+  <!-- Header Bar -->
+  <header>
+    <nav class="nav-center">
+      <a href="/" class="nav-link">Dashboard</a>
+      <a href="/network" class="nav-link">Network Controls</a>
+      <a href="/router/r0" class="nav-link">Router Mode</a>
+      <a href="/gan-comparison" class="nav-link active">GAN Comparison</a>
+      <a href="/mesh-poisoning" class="nav-link">Mesh Poisoning</a>
+    </nav>
+  </header>
+
+  <div class="container">
+
+    <!-- Summary / Methodology Card -->
+    <div class="card" style="margin-bottom: 16px; padding: 14px 18px;">
+      <div class="card-header">
+        <span class="card-title">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/>
+            <rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/>
+          </svg>
+          Content Authenticity GAN: 4-Architecture Comparison
+        </span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">
+          Oxford-IIIT Pet &middot; 128&times;128 &middot; Tesla T4 &middot; DiffAugment
+        </span>
+      </div>
+      <div class="card-body" style="padding-top: 10px;">
+        <p style="font-size:12.5px; color:var(--text-main); line-height:1.6; margin:0;">
+          WASP guarantees the <strong>privacy</strong> of a request (who asked for what), but nothing in its pipeline
+          verifies the <strong>authenticity</strong> of content sitting in a router's cache. To demonstrate that gap,
+          4 GAN architectures were trained to synthesize fake cat/dog images &mdash; candidates for the fake content
+          that gets deliberately injected into the mesh topology's caches as a simulated Content Poisoning Attack.
+          Trained on <strong>~7,349 real images</strong> (Oxford-IIIT Pet dataset, both splits combined), 100 epochs
+          each, with DiffAugment regularization, cuDNN benchmark mode, and mixed-precision (AMP) training.
+        </p>
+      </div>
+    </div>
+
+    <!-- FID Comparison Table + Chart -->
+    <div class="grid-main" style="margin-bottom: 16px;">
+
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">FID Score Ranking (lower = closer to real images)</span>
+        </div>
+        <table class="data-table" id="fidTable" style="margin-top: 4px;">
+          <thead>
+            <tr><th>Rank</th><th>Architecture</th><th>FID</th><th>Notes</th></tr>
+          </thead>
+          <tbody id="fidTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card chart-card">
+        <div class="chart-card-title">FID BY ARCHITECTURE</div>
+        <div class="chart-container" style="height: 220px;"><canvas id="chartFid"></canvas></div>
+      </div>
+
+    </div>
+
+    <!-- Sample Grids -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">Generated Samples (epoch 100/100, 16-image grid per architecture)</span>
+      </div>
+      <div class="card-body">
+        <div class="gan-sample-grid" id="sampleGrid"></div>
+      </div>
+    </div>
+
+    <!-- External Reference Section -->
+    <div class="card" style="margin-bottom: 16px;">
+      <div class="card-header">
+        <span class="card-title">External Reference &mdash; DCGAN vs. WGAN-GP on CIFAR-10</span>
+        <span style="font-family:var(--font-mono); font-size:11px; color:var(--text-muted);">Cited context, not our data</span>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px; color:var(--text-muted); line-height:1.6; margin:0 0 12px;">
+          For independent context (not trained on our data): <strong>MannShah0312/WGAN-Wasserstein_Generative_Adversarial_Network</strong>
+          compares the same DCGAN vs. WGAN-GP relationship on the standard CIFAR-10 benchmark. Our own result &mdash;
+          WGAN-GP (256.68) and DCGAN (256.08) landing nearly tied &mdash; sits close to, but does not strongly confirm,
+          WGAN-GP's usual stability advantage; the small gap here likely reflects how heavily both architectures
+          benefited equally from DiffAugment and the fine-tuning regime, narrowing the difference the loss function
+          alone would otherwise produce.
+        </p>
+        <div class="gan-reference-grid">
+          <div class="gan-reference-item">
+            <img src="/static/gan_assets/external_reference/01_generator_loss_comparison.png" alt="Generator loss comparison">
+            <div class="gan-reference-caption">Generator loss</div>
+          </div>
+          <div class="gan-reference-item">
+            <img src="/static/gan_assets/external_reference/02_discriminator_loss_comparison.png" alt="Discriminator loss comparison">
+            <div class="gan-reference-caption">Discriminator / critic loss</div>
+          </div>
+          <div class="gan-reference-item">
+            <img src="/static/gan_assets/external_reference/03_qualitative_comparison.png" alt="Qualitative comparison">
+            <div class="gan-reference-caption">Qualitative samples</div>
+          </div>
+          <div class="gan-reference-item">
+            <img src="/static/gan_assets/external_reference/04_fid_score_comparison.png" alt="FID score comparison">
+            <div class="gan-reference-caption">FID over training</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const RESULTS = [
+      { model: "dcgan",    label: "DCGAN",           fid: 256.08, note: "Leading candidate, simplest architecture" },
+      { model: "wgan_gp",  label: "WGAN-GP",         fid: 256.68, note: "Leading candidate, most stable loss (literature)" },
+      { model: "lsgan",    label: "LSGAN",           fid: 287.49, note: "Clearly behind the top two" },
+      { model: "cgan",     label: "Conditional GAN", fid: 300.76, note: "Weakest FID, but only one that can target cat/dog on demand" },
+    ];
+
+    const tbody = document.getElementById("fidTableBody");
+    RESULTS.slice().sort((a, b) => a.fid - b.fid).forEach((r, i) => {
+      const tr = document.createElement("tr");
+      const leading = i < 2;
+      tr.innerHTML = `
+        <td><strong>${i + 1}</strong></td>
+        <td>${leading ? `<span class="badge badge-connected">${r.label}</span>` : r.label}</td>
+        <td><strong>${r.fid.toFixed(2)}</strong></td>
+        <td style="color:var(--text-muted); font-size:11px;">${r.note}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    const sampleGrid = document.getElementById("sampleGrid");
+    RESULTS.forEach(r => {
+      const div = document.createElement("div");
+      div.className = "gan-sample-item";
+      div.innerHTML = `
+        <img src="/static/gan_assets/samples/${r.model}.png" alt="${r.label} samples">
+        <div class="gan-sample-caption">
+          <strong>${r.label}</strong>
+          <span class="text-muted">FID ${r.fid.toFixed(2)}</span>
+        </div>
+      `;
+      sampleGrid.appendChild(div);
+    });
+
+    new Chart(document.getElementById("chartFid"), {
+      type: "bar",
+      data: {
+        labels: RESULTS.map(r => r.label),
+        datasets: [{
+          label: "FID (lower = better)",
+          data: RESULTS.map(r => r.fid),
+          backgroundColor: RESULTS.map(r => r.fid === Math.min(...RESULTS.map(x => x.fid)) ? "#1f77b4" : "#9ca3af"),
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          x: { ticks: { color: "#000000", font: { family: "monospace", size: 10 } } },
+          y: { beginAtZero: true, ticks: { color: "#000000", font: { family: "monospace", size: 10 } } }
+        }
+      }
+    });
+  </script>
+</body>
+</html>

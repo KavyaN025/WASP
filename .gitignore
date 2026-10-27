@@ -10,3 +10,16 @@ __pycache__/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Large / regeneratable GAN training artifacts -- not source, not needed to
+# run the app. gan_lab/gpu_results/checkpoints/*.pt alone are ~287MB each
+# (GitHub hard-rejects any single file over 100MB), and the rest here is
+# superseded or reproducible by re-running the training scripts/notebook.
+# gan_lab/anti_gan_checkpoint.pt is deliberately NOT excluded -- it's small
+# (~44MB) and the live dashboard's anti-GAN scan needs it to work out of
+# the box after a fresh clone, without requiring a retrain first.
+gan_lab/gpu_results/
+gan_lab/checkpoints/
+gan_lab/samples/
+gan_lab/fid_eval/
+gan_lab/train_all.log

@@ -1,10 +1,13 @@
 import os
+import re
 import sys
 import json
 import time
 import math
+import random
 import asyncio
 import hashlib
+import networkx as nx
 from typing import Dict, Any, List, Optional, Set
 from pathlib import Path
 
@@ -20,6 +23,66 @@ WASP_LAB_DIR = SERVER_DIR.parent
 WEB_DIR = WASP_LAB_DIR / "web"
 ROOT_DIR = WASP_LAB_DIR.parent
 
+# anti-GAN content authenticity detector lives in gan_lab/, a sibling of
+# wasp_lab/ -- not an installed package, so it needs its directory on the
+# path. Import is optional: the engine falls back gracefully (scan endpoint
+# returns a clear error) if the detector was never trained.
+sys.path.insert(0, str(ROOT_DIR / "gan_lab"))
+try:
+    import anti_gan_infer
+    ANTI_GAN_AVAILABLE = anti_gan_infer.is_available()
+except ImportError:
+    anti_gan_infer = None
+    ANTI_GAN_AVAILABLE = False
+
+# Real content catalog: drop folders like `server/content/cats/`,
+# `server/content/dogs/` next to this file and a producer whose category
+# matches a folder name serves those actual filenames as content names
+# (e.g. "/cats/cat_image17.jpg") instead of a synthetic placeholder.
+# Ported from the NetworkCaching-backend lab (KavyaN025/NetworkCaching-backend).
+CONTENT_ROOT = os.environ.get("WASP_CONTENT_ROOT", str(SERVER_DIR / "content"))
+CONTENT_ITEMS_PER_CATEGORY = 15  # fallback item count when a category has no real folder
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
+_IGNORED_DIR_NAMES = {"__pycache__", "venv", ".venv", "env", "node_modules", ".git"}
+
+
+def discover_content_folders(root=CONTENT_ROOT):
+    """Scan `root` for subdirectories containing image files and return
+    {folder_name: [sorted file names]}, e.g. {"cats": [...], "dogs": [...]}."""
+    found = {}
+    if not os.path.isdir(root):
+        return found
+    for entry in sorted(os.listdir(root)):
+        full_path = os.path.join(root, entry)
+        if not os.path.isdir(full_path):
+            continue
+        if entry.startswith(".") or entry in _IGNORED_DIR_NAMES:
+            continue
+        files = sorted(
+            f for f in os.listdir(full_path)
+            if os.path.isfile(os.path.join(full_path, f))
+            and os.path.splitext(f)[1].lower() in IMAGE_EXTENSIONS
+        )
+        if files:
+            found[entry] = files
+    return found
+
+
+def build_content_pool(categories, real_folders=None):
+    """One content list per publisher category. A category matching a real
+    folder (e.g. "cats" -> content/cats/*.jpg) gets the actual filenames
+    (e.g. "/cats/fluffy.jpg"); otherwise it falls back to synthetic names
+    (e.g. "/publisher-3/item7.dat")."""
+    real_folders = real_folders or {}
+    pool = {}
+    for cat in categories:
+        files = real_folders.get(cat)
+        if files:
+            pool[cat] = [f"/{cat}/{fname}" for fname in files]
+        else:
+            pool[cat] = [f"/{cat}/item{i + 1}.dat" for i in range(CONTENT_ITEMS_PER_CATEGORY)]
+    return pool
+
 
 
 class ScenarioConfig(BaseModel):
@@ -31,18 +94,40 @@ class ScenarioConfig(BaseModel):
 class NetworkInit(BaseModel):
     num_routers: int = 3
     num_consumers: int = 3
-    num_producers: int = 1
+    num_producers: int = 2  # default to 2 so both real content folders (cats/dogs) are used
     pattern: str = "linear" # "linear" or "mesh"
     link_latency_ms: float = 10.0
     cs_capacity: int = 100
     scenario: str = "FULL_WASP"
 
+# The four schemes compared in the paper (Lal & Malani, Fig. 3-4):
+# A=NORMAL (no adversary), C=ATTACK (unshielded), B=STATIC_CRYPTO (fixed-key,
+# non-adaptive), D=WASP (full adaptive Shield+Crypto pipeline).
+SCHEMES = ["NORMAL", "ATTACK", "STATIC_CRYPTO", "WASP"]
+
+class SchemeConfig(BaseModel):
+    scheme: str = "WASP"
+
 class InjectConfig(BaseModel):
     consumer_id: str = "s0"
-    name: str = "/c/1"
+    name: str = "/cats/cat_image1.jpg"
 
 class AttackerTarget(BaseModel):
     target: str
+
+class PoisonConfig(BaseModel):
+    router_id: str
+    category: Optional[str] = None       # used to auto-pick targets when target_names is omitted
+    target_names: Optional[List[str]] = None  # explicit real content names to substitute fake content under
+    count: int = 3                       # how many names to auto-pick if target_names is omitted
+    source_dir: Optional[str] = None     # defaults to gan_lab/server/content/fake_<GAN_SOURCE_MODEL>
+
+class ScanConfig(BaseModel):
+    router_id: str
+    mitigate: Optional[bool] = None      # None = use engine-wide default
+
+class MitigationConfig(BaseModel):
+    enabled: bool
 
 class WaspParams(BaseModel):
     router_id: Optional[str] = "all"
@@ -89,7 +174,7 @@ class SimulationEngine:
             "topology": {
                 "n_subscribers": 3,
                 "n_routers": 3,
-                "n_producers": 1,
+                "n_producers": 2,
                 "pattern": "linear",
                 "link_latency_ms": 10.0,
                 "cs_capacity": 100
@@ -130,32 +215,37 @@ class SimulationEngine:
                 "name_obfuscation": True,
                 "timing_decorrelation": True,
                 "routing_diversity": True
+            },
+            "static_crypto": {
+                "key_size": 256,
+                "suppression": 0.5
+            },
+            "anti_gan": {
+                "mitigation_enabled": False,
+                "threshold": 0.5
             }
         }
 
         # Simulation state
         self.status = "STOPPED"
         self.sim_time = 0.0
-        self.world_mode = "BOTH" # "BOTH", "ON", "OFF"
+        self.scheme = "WASP"  # "NORMAL", "ATTACK", "STATIC_CRYPTO", "WASP"
         self.packet_counter = 0
 
         # PRNGs
         self.rng_traffic = np.random.default_rng(42)
-        self.rng_wasp_on = np.random.default_rng(1337)
-        self.rng_wasp_off = np.random.default_rng(1337)
 
-        # Content Watchlist
-        self.watchlist: Set[str] = {f"/c/{i}" for i in range(1, 21)}
-
-        # Attacker Bayesian Posteriors: name -> [alpha, beta]
-        self.posteriors_on: Dict[str, List[float]] = {}
-        self.posteriors_off: Dict[str, List[float]] = {}
-        self.reset_posteriors()
-
-        # Topology and Nodes
+        # Topology and Nodes (also builds self.content_pool and self.watchlist
+        # from the real/synthetic content catalog -- must run before the
+        # watchlist-dependent posteriors are initialized below)
         self.nodes: Dict[str, Dict[str, Any]] = {}
         self.edges: List[Dict[str, str]] = []
+        self.watchlist: Set[str] = set()
         self.init_topology()
+
+        # Attacker Bayesian Posteriors per scheme: scheme -> name -> [alpha, beta]
+        self.posteriors: Dict[str, Dict[str, List[float]]] = {}
+        self.reset_posteriors()
 
         # Sliding window history for Traffic Monitoring
         self.window_history: List[Dict[str, Any]] = []
@@ -165,6 +255,12 @@ class SimulationEngine:
 
         # Trace log (bounded)
         self.trace_log: List[Dict[str, Any]] = []
+
+        # Content Poisoning Attack event log (see poison_cache())
+        self.poison_log: List[Dict[str, Any]] = []
+
+        # Anti-GAN authenticity scan event log (see scan_router_cache())
+        self.scan_log: List[Dict[str, Any]] = []
 
         # Historical metrics for time-series charts
         self.metrics_history: List[Dict[str, Any]] = []
@@ -184,41 +280,64 @@ class SimulationEngine:
 
     def reset_posteriors(self):
         prior = self.config["attacker"]["confidence_prior"]
-        self.posteriors_on = {}
-        self.posteriors_off = {}
-        for name in self.watchlist:
-            self.posteriors_on[name] = [prior * 10.0, (1.0 - prior) * 10.0]
-            self.posteriors_off[name] = [prior * 10.0, (1.0 - prior) * 10.0]
+        self.posteriors = {scheme: {} for scheme in SCHEMES}
+        for scheme in SCHEMES:
+            for name in self.watchlist:
+                self.posteriors[scheme][name] = [prior * 10.0, (1.0 - prior) * 10.0]
 
     def init_topology(self):
+        """Builds the router interconnect, subscriber/publisher attachment,
+        per-category FIB, and content catalog. Topology generator, FIB, and
+        content discovery ported from NetworkCaching-backend
+        (KavyaN025/NetworkCaching-backend): a random connected mesh of
+        routers via networkx, one publisher per content category, and a
+        BFS shortest-path-tree FIB per category -- instead of WASP's
+        original single-producer, name-agnostic chain."""
+        # Seed the global random module from the traffic seed so identical
+        # topology configs (same counts/pattern + same seed) reproduce the
+        # same mesh/attachments -- otherwise /network/init and /reseed with
+        # the same seed would silently give a different topology each call.
+        random.seed(self.config["seeds"]["traffic"])
+
         top_cfg = self.config["topology"]
         n_subs = top_cfg["n_subscribers"]
-        n_routers = top_cfg["n_routers"]
-        n_prods = top_cfg["n_producers"]
+        n_routers = max(1, top_cfg["n_routers"])
+        n_prods = max(1, top_cfg["n_producers"])
         pattern = top_cfg.get("pattern", "linear")
 
         self.nodes = {}
         self.edges = []
+        router_ids = [f"r{i}" for i in range(n_routers)]
 
-        # Subscribers
-        for i in range(n_subs):
-            nid = f"s{i}"
-            self.nodes[nid] = {
-                "id": nid,
-                "type": "subscriber",
-                "status": "ONLINE",
-                "neighbors": []
-            }
+        # Router interconnect: random connected mesh, or a simple chain.
+        graph = nx.Graph()
+        graph.add_nodes_from(router_ids)
+        if pattern == "mesh" and n_routers >= 2:
+            for i in range(1, n_routers):
+                j = random.randint(0, i - 1)
+                graph.add_edge(router_ids[j], router_ids[i])
+            extra_target = max(0, round(n_routers * 0.45))
+            added, attempts = 0, 0
+            while added < extra_target and attempts < extra_target * 12 and n_routers > 2:
+                attempts += 1
+                a, b = random.sample(router_ids, 2)
+                if not graph.has_edge(a, b):
+                    graph.add_edge(a, b)
+                    added += 1
+        else:  # linear chain
+            for i in range(n_routers - 1):
+                graph.add_edge(router_ids[i], router_ids[i + 1])
+        self.graph = graph
 
-        # Routers
-        for i in range(n_routers):
-            nid = f"r{i}"
-            self.nodes[nid] = {
-                "id": nid,
+        # Router nodes
+        obs_routers = self.config["attacker"]["observation_routers"]
+        for rid in router_ids:
+            self.nodes[rid] = {
+                "id": rid,
                 "type": "router",
                 "status": "ONLINE",
-                "wasp_enabled": True,
-                "is_compromised": nid in self.config["attacker"]["observation_routers"],
+                "wasp_enabled": self.scheme in ("STATIC_CRYPTO", "WASP"),
+                "is_compromised": rid in obs_routers,
                 "pit": [],
                 "cs": [],
                 "fib": [],
@@ -227,17 +346,44 @@ class SimulationEngine:
                 "neighbors": []
             }
 
-        # Producers
-        for i in range(n_prods):
-            nid = f"p{i}"
-            self.nodes[nid] = {
-                "id": nid,
+        # Subscribers: attached to a router. A mesh spreads them across
+        # random routers; a linear chain keeps the simple "all start at r0"
+        # picture.
+        self.subscribers = []
+        for i in range(n_subs):
+            sid = f"s{i}"
+            attach = random.choice(router_ids) if pattern == "mesh" else router_ids[0]
+            self.nodes[sid] = {"id": sid, "type": "subscriber", "status": "ONLINE", "router": attach, "neighbors": []}
+            self.subscribers.append(sid)
+
+        # Publishers: one real content folder (server/content/cats,
+        # server/content/dogs, ...) per publisher where available, else a
+        # synthetic category -- always works, real folders or not.
+        real_folders = discover_content_folders()
+        real_names = sorted(real_folders.keys())
+        categories = [real_names[i] if i < len(real_names) else f"publisher-{i + 1}" for i in range(n_prods)]
+
+        self.publishers = []
+        self.category_publisher = {}
+        for i, cat in enumerate(categories):
+            pid = f"p{i}"
+            attach = random.choice(router_ids) if pattern == "mesh" else router_ids[-1]
+            label = f"Publisher · {cat}" if cat in real_folders else f"Publisher {i + 1}"
+            self.nodes[pid] = {
+                "id": pid,
                 "type": "producer",
                 "status": "ONLINE",
+                "category": cat,
+                "label": label,
+                "router": attach,
                 "neighbors": []
             }
+            self.publishers.append(pid)
+            self.category_publisher[cat] = pid
 
-        # Build links
+        self.content_pool = build_content_pool(categories, real_folders)
+
+        # Links: router interconnect + subscriber/publisher access links
         def add_link(u, v):
             self.edges.append({"src": u, "dst": v})
             if v not in self.nodes[u]["neighbors"]:
@@ -245,48 +391,221 @@ class SimulationEngine:
             if u not in self.nodes[v]["neighbors"]:
                 self.nodes[v]["neighbors"].append(u)
 
-        if pattern == "mesh" and n_routers >= 3:
-            # Subs to r0 and r1
-            for i in range(n_subs):
-                add_link(f"s{i}", f"r{i % min(2, n_routers)}")
-            # Routers mesh
-            for i in range(n_routers):
-                for j in range(i + 1, n_routers):
-                    add_link(f"r{i}", f"r{j}")
-            # Last routers to prods
-            for i in range(n_prods):
-                add_link(f"r{n_routers - 1}", f"p{i}")
-        else: # linear
-            # Subs -> r0
-            for i in range(n_subs):
-                add_link(f"s{i}", "r0")
-            # Router chain r0 -> r1 -> r2 ...
-            for i in range(n_routers - 1):
-                add_link(f"r{i}", f"r{i+1}")
-            # r_last -> prods
-            for i in range(n_prods):
-                add_link(f"r{n_routers - 1}", f"p{i}")
+        for a, b in graph.edges():
+            add_link(a, b)
+        for sid in self.subscribers:
+            add_link(sid, self.nodes[sid]["router"])
+        for pid in self.publishers:
+            add_link(pid, self.nodes[pid]["router"])
 
-        # Populate FIB entries at each router
-        for i in range(n_routers):
-            rid = f"r{i}"
-            next_hop = f"r{i+1}" if i < n_routers - 1 else "p0"
+        # Per-category FIB: BFS shortest-path tree rooted at each publisher's
+        # router. Every other router's entry for that category is simply its
+        # parent in the tree -- the neighbor to forward toward.
+        self.fib = {rid: {} for rid in router_ids}
+        for pid in self.publishers:
+            pub = self.nodes[pid]
+            root, cat = pub["router"], pub["category"]
+            paths = nx.single_source_shortest_path(graph, root)
+            for rid in router_ids:
+                if rid == root:
+                    self.fib[rid][cat] = "local"
+                else:
+                    path = paths.get(rid)
+                    self.fib[rid][cat] = path[-2] if path and len(path) > 1 else None
+
+        for rid in router_ids:
             self.nodes[rid]["fib"] = [
-                {"prefix": "/c/*", "face": next_hop, "cost": 1.0}
+                {"prefix": f"/{cat}/*", "face": nxt, "cost": 1.0}
+                for cat, nxt in self.fib[rid].items() if nxt and nxt != "local"
             ]
-            if pattern == "mesh" and n_routers >= 3:
-                # add alternative route for diversity
-                alt_hop = f"r{(i+2) % n_routers}"
-                if alt_hop != rid and alt_hop != next_hop:
-                    self.nodes[rid]["fib"].append({"prefix": "/c/*", "face": alt_hop, "cost": 1.5})
+
+        self.rebuild_watchlist()
+
+    def rebuild_watchlist(self):
+        """(Re)builds self.watchlist from the current content_pool using the
+        configured watchlist_size, split evenly across categories -- a
+        sensitive SUBSET of the catalog, matching the paper's
+        watchlist-attack premise. Callable on its own (e.g. after a traffic
+        config change) without regenerating the rest of the topology."""
+        watchlist_size = self.config["traffic"].get("watchlist_size", 20)
+        categories = list(self.content_pool.keys())
+        per_category = max(1, watchlist_size // max(1, len(categories)))
+        self.watchlist = set()
+        for cat in categories:
+            pool = self.content_pool[cat]
+            self.watchlist.update(pool[:min(per_category, len(pool))])
+
+    def route(self, start_router, category):
+        """FIB-driven path from start_router to the category's publisher's
+        router, one hop at a time. Ported from NetworkCaching-backend's
+        Network.route()."""
+        path = [start_router]
+        current = start_router
+        seen = {current}
+        while self.fib.get(current, {}).get(category) not in (None, "local"):
+            nxt = self.fib[current][category]
+            if nxt is None or nxt in seen:
+                break
+            path.append(nxt)
+            seen.add(nxt)
+            current = nxt
+        return path
 
     def reseed(self, seed_traffic: int, seed_wasp: int):
         self.config["seeds"]["traffic"] = seed_traffic
         self.config["seeds"]["wasp"] = seed_wasp
         self.rng_traffic = np.random.default_rng(seed_traffic)
-        self.rng_wasp_on = np.random.default_rng(seed_wasp)
-        self.rng_wasp_off = np.random.default_rng(seed_wasp)
         self.reset_posteriors()
+
+    def apply_scheme(self, scheme: str):
+        scheme = scheme.upper()
+        if scheme not in SCHEMES:
+            return
+        self.scheme = scheme
+        wasp_enabled = scheme in ("STATIC_CRYPTO", "WASP")
+        for node in self.nodes.values():
+            if node["type"] == "router":
+                node["wasp_enabled"] = wasp_enabled
+
+    def reset_simulation(self):
+        """Full reset for STOP (distinct from PAUSE, which halts the clock
+        but preserves everything): sim time, packet counter, trace/metric
+        history, poisoning/scan logs, and router cache state all return to
+        a fresh starting point, so the next START begins a genuinely new
+        run instead of resuming where the last one left off. Topology is
+        rebuilt (not just cache-cleared) since that's the simplest way to
+        guarantee every nested mutable field poisoning/scanning touched is
+        truly reset -- safe because topology generation is seeded, so the
+        same config always reproduces the same mesh."""
+        self.status = "STOPPED"
+        self.sim_time = 0.0
+        self.packet_counter = 0
+        self.window_history = []
+        self.active_packets = []
+        self.trace_log = []
+        self.metrics_history = []
+        self.poison_log = []
+        self.scan_log = []
+        self.init_topology()
+        self.reset_posteriors()
+
+    def poison_cache(self, router_id: str, target_names: List[str], image_filenames: List[str]):
+        """Content Poisoning Attack simulation: substitutes GAN-generated
+        fake images into a router's Content Store UNDER THE NAME OF
+        EXISTING REAL CONTENT (e.g. overwriting the cache entry for
+        '/cats/cat_image5.jpg') -- exactly how a real CPA works. The
+        attacker doesn't invent a new name; they corrupt an existing
+        (often popular/watchlisted) one, so every subsequent legitimate
+        request for that name organically gets served the fake object
+        instead of the real one, through the exact same cache-hit path
+        process_interest() already uses -- no special-casing needed.
+        WASP's routing/caching/privacy math can't tell the difference,
+        since it's a name-based lookup; that's precisely the gap this
+        GAN/anti-GAN track exists to close. Returns the list of
+        {name, source_image} substitutions actually made."""
+        if router_id not in self.nodes or self.nodes[router_id]["type"] != "router":
+            raise ValueError(f"Unknown router: {router_id}")
+        cs = self.nodes[router_id]["cs"]
+        poisoned = []
+        for content_name, fname in zip(target_names, image_filenames):
+            cs[:] = [e for e in cs if e["prefix"] != content_name]
+            if len(cs) >= self.config["topology"]["cs_capacity"]:
+                cs.pop(0)
+            cs.append({
+                "prefix": content_name,
+                "cached_time": self.sim_time,
+                "hit_count": 0,
+                "fresh": True,
+                "is_synthetic": True,
+                "source_image": fname
+            })
+            poisoned.append({"name": content_name, "source_image": fname})
+
+        self.poison_log.append({
+            "time": round(self.sim_time, 2),
+            "router_id": router_id,
+            "items": poisoned
+        })
+        if len(self.poison_log) > 100:
+            self.poison_log.pop(0)
+        return poisoned
+
+    def scan_router_cache(self, router_id: str, mitigate: Optional[bool] = None):
+        """Anti-GAN authenticity scan: runs the trained content-authenticity
+        detector (gan_lab/anti_gan_infer.py) over everything currently
+        cached at a router. Deliberately NOT run automatically on every
+        cache insert -- inference is too slow (tens of ms) to do on every
+        packet in the 10Hz simulation loop, and a triggered scan matches
+        the real "attack happens, dwell time passes, detection catches up"
+        security narrative better than continuous scanning anyway.
+
+        If mitigation is enabled (explicit param, else the engine-wide
+        config default), any entry the detector flags SUSPECT gets evicted
+        and replaced with a freshly re-verified copy of the real content --
+        the "detect AND correct" policy, closing the loop WASP's privacy
+        pipeline alone never could. Returns the per-entry scan results."""
+        if router_id not in self.nodes or self.nodes[router_id]["type"] != "router":
+            raise ValueError(f"Unknown router: {router_id}")
+        if anti_gan_infer is None or not ANTI_GAN_AVAILABLE:
+            raise RuntimeError("Anti-GAN detector not available -- run gan_lab/anti_gan_train.py first.")
+
+        if mitigate is None:
+            mitigate = self.config["anti_gan"]["mitigation_enabled"]
+        threshold = self.config["anti_gan"]["threshold"]
+
+        cs = self.nodes[router_id]["cs"]
+        results = []
+        for entry in list(cs):
+            content_name = entry["prefix"]
+            if entry.get("is_synthetic"):
+                img_path = FAKE_CONTENT_DIR / entry.get("source_image", "")
+            else:
+                img_path = CONTENT_DIR / content_name.lstrip("/")
+
+            try:
+                score = anti_gan_infer.score_image_cached(str(img_path))
+            except Exception:
+                score = None
+
+            label, corrected = None, False
+            if score is not None:
+                label = "VERIFIED" if score >= threshold else "SUSPECT"
+                entry["authenticity_score"] = round(score, 4)
+                entry["authenticity_label"] = label
+
+                if label == "SUSPECT" and mitigate:
+                    cs.remove(entry)
+                    real_path = CONTENT_DIR / content_name.lstrip("/")
+                    if real_path.exists():
+                        real_score = anti_gan_infer.score_image_cached(str(real_path))
+                        cs.append({
+                            "prefix": content_name,
+                            "cached_time": self.sim_time,
+                            "hit_count": 0,
+                            "fresh": True,
+                            "is_synthetic": False,
+                            "authenticity_score": round(real_score, 4),
+                            "authenticity_label": "VERIFIED (restored)"
+                        })
+                        corrected = True
+
+            results.append({
+                "name": content_name,
+                "ground_truth_synthetic": entry.get("is_synthetic", False),
+                "score": round(score, 4) if score is not None else None,
+                "label": label,
+                "corrected": corrected
+            })
+
+        self.scan_log.append({
+            "time": round(self.sim_time, 2),
+            "router_id": router_id,
+            "mitigated": mitigate,
+            "results": results
+        })
+        if len(self.scan_log) > 50:
+            self.scan_log.pop(0)
+        return results
 
     # Algorithm 1 Pipeline & Calculations
     def process_interest(self, content_name: str, subscriber_id: str = "s0", synthetic: bool = False) -> Dict[str, Any]:
@@ -322,8 +641,16 @@ class SimulationEngine:
         total_hits = sum(self.nodes[f"r{i}"]["cache_hits"] for i in range(n_routers))
         C_c = (total_hits / max(1, total_requests))
 
-        # Hop count H_c
-        H_c = float(n_routers)
+        # Resolve which category/publisher this content belongs to, and the
+        # FIB-driven router path from the requesting subscriber to it (ported
+        # from NetworkCaching-backend's Network.route()).
+        name_parts = content_name.strip("/").split("/")
+        category = name_parts[0] if name_parts and name_parts[0] in self.category_publisher else next(iter(self.category_publisher), "")
+        start_router = self.nodes.get(subscriber_id, {}).get("router") or next(iter(self.fib), "r0")
+        router_path = self.route(start_router, category)
+
+        # Hop count H_c (real path length, not a constant)
+        H_c = float(len(router_path))
 
         # ---------------------------------------------------------------------
         # Stage 2: Privacy Exposure Estimation (PE)
@@ -362,13 +689,25 @@ class SimulationEngine:
         eta_1 = wasp_cfg["eta_1"]
         eta_2 = wasp_cfg["eta_2"]
         if S_i < eta_1:
-            mode = "Normal"
+            adaptive_mode = "Normal"
         elif S_i < eta_2:
-            mode = "Protected"
+            adaptive_mode = "Protected"
         else:
-            mode = "Shielded"
+            adaptive_mode = "Shielded"
 
-        decision = 1 if mode in ["Protected", "Shielded"] else 0
+        adaptive_decision = 1 if adaptive_mode in ["Protected", "Shielded"] else 0
+
+        # Scheme override: each of the paper's four schemes follows a different
+        # protection policy, not just a display filter over the same pipeline.
+        scheme = self.scheme
+        if scheme == "NORMAL":
+            decision, mode = 0, "Normal"
+        elif scheme == "ATTACK":
+            decision, mode = 0, "Unshielded"
+        elif scheme == "STATIC_CRYPTO":
+            decision, mode = 1, "StaticCrypto"
+        else:  # WASP
+            decision, mode = adaptive_decision, adaptive_mode
 
         # ---------------------------------------------------------------------
         # Stage 4: Dynamic Cryptographic Protection (DCP)
@@ -376,8 +715,15 @@ class SimulationEngine:
         K_min = wasp_cfg["K_min"]
         K_max = wasp_cfg["K_max"]
         T_b = wasp_cfg["T_b"]
+        static_cfg = self.config["static_crypto"]
 
-        if decision == 1:
+        if scheme == "STATIC_CRYPTO":
+            # Conventional cryptography: fixed key size for every packet,
+            # no sigmoid-driven adaptivity (paper Fig. 3b, scheme B).
+            K_i = static_cfg["key_size"]
+            T_enc = T_b * (K_i / 128.0)
+            O_c = T_enc * (K_i / 256.0)
+        elif decision == 1:
             K_i = int(K_min + S_i * (K_max - K_min))
             T_enc = T_b * (K_i / 128.0)
             O_c = T_enc * (K_i / 256.0)
@@ -393,24 +739,23 @@ class SimulationEngine:
         delta_max = wasp_cfg["delta_max_ms"]
         rho = wasp_cfg["rho"]
 
-        if decision == 1 and ablation["timing_decorrelation"]:
+        if scheme == "WASP" and decision == 1 and ablation["timing_decorrelation"]:
             adaptive_delay_ms = delta_min + (delta_max - delta_min) * S_i
         else:
             adaptive_delay_ms = 0.0
 
-        if decision == 1 and ablation["routing_diversity"]:
+        if scheme == "WASP" and decision == 1 and ablation["routing_diversity"]:
             routing_diversity = 1.0 + rho * S_i
         else:
             routing_diversity = 1.0
 
-        # Route determination
-        route_nodes = [subscriber_id]
+        # Route determination: walk the FIB-resolved path computed in Stage 1,
+        # checking each router's cache along the way.
+        route_nodes = [subscriber_id] + router_path
         cache_hit_node = None
 
-        # Check caching in routers along path
-        for i in range(n_routers):
-            rid = f"r{i}"
-            route_nodes.append(rid)
+        served_synthetic = False
+        for rid in router_path:
             r_node = self.nodes[rid]
             cs_entries = [entry["prefix"] for entry in r_node["cs"]]
             if content_name in cs_entries:
@@ -419,15 +764,18 @@ class SimulationEngine:
                 for entry in r_node["cs"]:
                     if entry["prefix"] == content_name:
                         entry["hit_count"] += 1
+                        served_synthetic = entry.get("is_synthetic", False)
                 break
             else:
                 r_node["cache_misses"] += 1
 
         if not cache_hit_node:
-            route_nodes.append("p0")
-            # Cache at intermediate routers on Data return
-            for i in range(n_routers):
-                rid = f"r{i}"
+            pub_id = self.category_publisher.get(category)
+            if pub_id:
+                route_nodes.append(pub_id)
+            # Cache at every router actually on the path (only those the
+            # Interest/Data genuinely traversed, not every router network-wide)
+            for rid in router_path:
                 cs = self.nodes[rid]["cs"]
                 if not any(entry["prefix"] == content_name for entry in cs):
                     if len(cs) >= top_cfg["cs_capacity"]:
@@ -436,7 +784,8 @@ class SimulationEngine:
                         "prefix": content_name,
                         "cached_time": t,
                         "hit_count": 0,
-                        "fresh": True
+                        "fresh": True,
+                        "is_synthetic": False
                     })
 
         # Calculate latency
@@ -452,37 +801,36 @@ class SimulationEngine:
         obs_routers = self.config["attacker"]["observation_routers"]
         observed_by_attacker = any(r in route_nodes for r in obs_routers)
 
-        # WASP-ON World Observation
-        observed_name_on = content_name
-        if observed_by_attacker and is_watchlisted:
-            if decision == 1 and ablation["name_obfuscation"]:
-                # A-SHLD-1: Name Obfuscation into Opaque Token
+        # NORMAL has no watchlist adversary present at all (paper's unattacked baseline)
+        observed_name = content_name
+        if observed_by_attacker and is_watchlisted and scheme != "NORMAL":
+            bank = self.posteriors[scheme]
+            a, b = bank[content_name]
+            if scheme == "WASP" and decision == 1 and ablation["name_obfuscation"]:
+                # A-SHLD-1: Name Obfuscation into Opaque Token; confidence decays via Eq. 48
                 token_hash = hashlib.sha256(content_name.encode()).hexdigest()[:8]
-                observed_name_on = f"OPAQUE_{token_hash}"
-                # Attacker confidence is suppressed (or decays via Eq. 48)
-                a, b = self.posteriors_on[content_name]
-                # Under shielding, Eq. 48 states confidence reduces by (1 - S_i)
+                observed_name = f"OPAQUE_{token_hash}"
                 suppression = max(0.0, 1.0 - S_i)
-                self.posteriors_on[content_name] = [a * suppression, b + (1.0 - suppression)]
+                bank[content_name] = [a * suppression, b + (1.0 - suppression)]
+            elif scheme == "STATIC_CRYPTO":
+                # Conventional crypto hides the name behind a fixed-strength token, but
+                # without adaptive timing/routing cover it still leaks via side channels
+                token_hash = hashlib.sha256(content_name.encode()).hexdigest()[:8]
+                observed_name = f"ENC_{token_hash}"
+                suppression = static_cfg["suppression"]
+                bank[content_name] = [a * suppression, b + (1.0 - suppression)]
             else:
-                # Plaintext observation
-                self.posteriors_on[content_name][0] += 1.0
-        elif observed_by_attacker and not is_watchlisted:
-            # Non-watchlist traffic naturally dilutes prior
-            pass
+                # ATTACK (and WASP when the adaptive decision is 0): plaintext observation
+                bank[content_name][0] += 1.0
 
-        # WASP-OFF World Observation (Unshielded)
-        if observed_by_attacker and is_watchlisted:
-            self.posteriors_off[content_name][0] += 1.0
-
-        # Posterior Confidences
-        conf_on = 0.0
-        conf_off = 0.0
+        # Posterior confidence for this content under every scheme (for comparison charts)
         if is_watchlisted:
-            a_on, b_on = self.posteriors_on[content_name]
-            conf_on = a_on / max(1e-6, a_on + b_on)
-            a_off, b_off = self.posteriors_off[content_name]
-            conf_off = a_off / max(1e-6, a_off + b_off)
+            conf_by_scheme = {
+                s: self.posteriors[s][content_name][0] / max(1e-6, sum(self.posteriors[s][content_name]))
+                for s in SCHEMES
+            }
+        else:
+            conf_by_scheme = {s: 0.0 for s in SCHEMES}
 
         # Add to active packets in transit for animation (capped at 16 to maintain high-fps rendering)
         if len(self.active_packets) < 16:
@@ -499,6 +847,7 @@ class SimulationEngine:
                 "decision": decision,
                 "is_watchlisted": is_watchlisted,
                 "is_shielded": decision == 1,
+                "served_synthetic": served_synthetic,
                 "start_time": t,
                 "total_latency": total_latency_ms
             })
@@ -603,18 +952,28 @@ class SimulationEngine:
             "attacker_posterior": {
                 "observation": {
                     "eq": "O(t) = \\text{Inspect}(c)",
-                    "sub": f"At {obs_routers}: observed as '{observed_name_on}'",
-                    "val": observed_name_on
+                    "sub": f"At {obs_routers}: observed as '{observed_name}' (active scheme={scheme})",
+                    "val": observed_name
                 },
-                "confidence_wasp_on": {
+                "confidence_normal": {
                     "eq": "P_L(c) = \\frac{\\alpha}{\\alpha + \\beta}",
-                    "sub": f"Posterior on '{content_name}' under WASP defense",
-                    "val": round(conf_on, 3)
+                    "sub": f"Posterior on '{content_name}' under Normal (no attacker)",
+                    "val": round(conf_by_scheme["NORMAL"], 3)
                 },
-                "confidence_wasp_off": {
+                "confidence_attack": {
                     "eq": "P_L(c) = \\frac{\\alpha}{\\alpha + \\beta}",
-                    "sub": f"Posterior on '{content_name}' without WASP",
-                    "val": round(conf_off, 3)
+                    "sub": f"Posterior on '{content_name}' under unprotected Watchlist Attack",
+                    "val": round(conf_by_scheme["ATTACK"], 3)
+                },
+                "confidence_static_crypto": {
+                    "eq": "P_L(c) = \\frac{\\alpha}{\\alpha + \\beta}",
+                    "sub": f"Posterior on '{content_name}' under Static/Conventional Crypto",
+                    "val": round(conf_by_scheme["STATIC_CRYPTO"], 3)
+                },
+                "confidence_wasp": {
+                    "eq": "P_L(c) = \\frac{\\alpha}{\\alpha + \\beta}",
+                    "sub": f"Posterior on '{content_name}' under Full WASP defense",
+                    "val": round(conf_by_scheme["WASP"], 3)
                 }
             }
         }
@@ -625,13 +984,16 @@ class SimulationEngine:
             "synthetic": synthetic,
             "time": round(t, 2),
             "src": subscriber_id,
-            "dst": "p0",
+            "dst": self.category_publisher.get(category, "p0"),
+            "category": category,
             "path": route_nodes,
             "cache_hit": cache_hit_node is not None,
             "cache_node": cache_hit_node,
+            "served_synthetic": served_synthetic,
             "is_watchlisted": is_watchlisted,
             "observed_by_attacker": observed_by_attacker,
-            "observed_as": observed_name_on,
+            "observed_as": observed_name,
+            "scheme": scheme,
             "pes": round(PES, 3),
             "risk": round(P_i, 3),
             "risk_level": risk_level,
@@ -643,8 +1005,10 @@ class SimulationEngine:
             "adaptive_delay_ms": round(adaptive_delay_ms, 2),
             "routing_diversity": round(routing_diversity, 2),
             "latency_ms": round(total_latency_ms, 2),
-            "conf_on": round(conf_on, 3),
-            "conf_off": round(conf_off, 3),
+            "conf_normal": round(conf_by_scheme["NORMAL"], 3),
+            "conf_attack": round(conf_by_scheme["ATTACK"], 3),
+            "conf_static_crypto": round(conf_by_scheme["STATIC_CRYPTO"], 3),
+            "conf_wasp": round(conf_by_scheme["WASP"], 3),
             "breakdown": breakdown
         }
 
@@ -685,16 +1049,20 @@ class SimulationEngine:
         for idx in reversed(finished_indices):
             self.active_packets.pop(idx)
 
-        # Stochastic traffic arrival using Zipf sampling
+        # Stochastic traffic arrival: pick a random category, then a
+        # Zipf-ranked item within that category's real content pool (keeps
+        # the popularity skew that drives F_c / the privacy-exposure math,
+        # now over real filenames instead of a flat synthetic /c/N catalog).
         mean_ia = self.config["traffic"]["mean_inter_arrival_ms"] / 1000.0
         prob_arrival = dt / max(1e-4, mean_ia)
-        if self.rng_traffic.random() < prob_arrival:
+        if self.rng_traffic.random() < prob_arrival and self.content_pool:
             alpha = self.config["traffic"]["zipf_alpha"]
-            catalog = self.config["traffic"]["catalog_size"]
+            categories = list(self.content_pool.keys())
+            category = categories[int(self.rng_traffic.integers(0, len(categories)))]
+            pool = self.content_pool[category]
             rank = int(self.rng_traffic.zipf(alpha))
-            if rank > catalog:
-                rank = catalog
-            content_name = f"/c/{rank}"
+            idx = min(rank - 1, len(pool) - 1)
+            content_name = pool[idx]
             sub_id = f"s{self.rng_traffic.integers(0, self.config['topology']['n_subscribers'])}"
             self.process_interest(content_name, sub_id)
 
@@ -703,24 +1071,22 @@ class SimulationEngine:
             self.record_metric_sample()
 
     def record_metric_sample(self):
-        # Mean attacker confidence over watchlist
-        mean_conf_on = np.mean([
-            a / max(1e-6, a + b) for a, b in self.posteriors_on.values()
-        ]) if self.posteriors_on else 0.1
-        mean_conf_off = np.mean([
-            a / max(1e-6, a + b) for a, b in self.posteriors_off.values()
-        ]) if self.posteriors_off else 0.1
+        # Mean attacker confidence over watchlist, per scheme bank
+        mean_conf = {}
+        for s in SCHEMES:
+            bank = self.posteriors[s]
+            mean_conf[s] = float(np.mean([a / max(1e-6, a + b) for a, b in bank.values()])) if bank else 0.1
 
-        # Latency hit vs miss
+        # Latency hit vs miss (from the currently active scheme's traces)
         recent_traces = self.trace_log[-20:] if self.trace_log else []
         hits = [t["latency_ms"] for t in recent_traces if t["cache_hit"]]
         misses = [t["latency_ms"] for t in recent_traces if not t["cache_hit"]]
         lat_hit = float(np.mean(hits)) if hits else 5.0
         lat_miss = float(np.mean(misses)) if misses else 25.0
 
-        # PDR and CHR
-        pdr_on = 0.94 if self.status == "RUNNING" else 0.0
-        pdr_off = 0.96 if self.status == "RUNNING" else 0.0
+        # PDR per scheme (paper-reported reference values, Fig. 3b) and CHR
+        pdr_reference = {"NORMAL": 0.98, "ATTACK": 0.65, "STATIC_CRYPTO": 0.87, "WASP": 0.94}
+        pdr_active = pdr_reference[self.scheme] if self.status == "RUNNING" else 0.0
         total_hits = sum(self.nodes[f"r{i}"]["cache_hits"] for i in range(self.config["topology"]["n_routers"]))
         total_misses = sum(self.nodes[f"r{i}"]["cache_misses"] for i in range(self.config["topology"]["n_routers"]))
         chr = float(total_hits / max(1, total_hits + total_misses))
@@ -735,14 +1101,16 @@ class SimulationEngine:
 
         sample = {
             "time": round(self.sim_time, 2),
-            "conf_on": round(float(mean_conf_on), 3),
-            "conf_off": round(float(mean_conf_off), 3),
+            "scheme": self.scheme,
+            "conf_normal": round(mean_conf["NORMAL"], 3),
+            "conf_attack": round(mean_conf["ATTACK"], 3),
+            "conf_static_crypto": round(mean_conf["STATIC_CRYPTO"], 3),
+            "conf_wasp": round(mean_conf["WASP"], 3),
             "lat_hit": round(lat_hit, 2),
             "lat_miss": round(lat_miss, 2),
-            "pdr_on": round(pdr_on, 3),
-            "pdr_off": round(pdr_off, 3),
+            "pdr_active": round(pdr_active, 3),
             "chr": round(chr, 3),
-            "isr": round(float(mean_conf_off - mean_conf_on), 3),
+            "isr": round(mean_conf["ATTACK"] - mean_conf["WASP"], 3),
             "E_s": round(E_s, 3),
             "O_s": round(O_s, 3),
             "O_c": round(O_c, 3),
@@ -758,19 +1126,28 @@ class SimulationEngine:
         # Calculate watchlist confidences for UI with safe numeric sorting
         watchlist_stats = []
         def safe_sort(name):
-            try:
-                return int(name.split("/")[-1])
-            except Exception:
-                return 9999
+            # Pulls the last run of digits out of the name for ordering --
+            # works for both old-style "/c/17" and real filenames like
+            # "/cats/cat_image17.jpg" (int(name.split("/")[-1]) only ever
+            # worked for the former and silently collapsed every real
+            # filename to the same fallback key).
+            match = re.search(r"(\d+)(?:\.\w+)?$", name)
+            return int(match.group(1)) if match else 9999
 
         for name in sorted(list(self.watchlist), key=safe_sort):
-            a_on, b_on = self.posteriors_on.get(name, [1.0, 9.0])
-            a_off, b_off = self.posteriors_off.get(name, [1.0, 9.0])
-            watchlist_stats.append({
-                "name": name,
-                "conf_on": round(float(a_on / max(1e-6, a_on + b_on)), 3),
-                "conf_off": round(float(a_off / max(1e-6, a_off + b_off)), 3),
-            })
+            item = {"name": name}
+            for s in SCHEMES:
+                a, b = self.posteriors[s].get(name, [1.0, 9.0])
+                item[f"conf_{s.lower()}"] = round(float(a / max(1e-6, a + b)), 3)
+            watchlist_stats.append(item)
+
+        # A few non-watchlisted items per category, for UI quick-select
+        # controls that want to offer a "normal" (unmonitored) content item
+        # alongside the sensitive watchlisted ones.
+        content_sample = []
+        for cat, pool in self.content_pool.items():
+            normal_items = [c for c in pool if c not in self.watchlist]
+            content_sample.extend(normal_items[:3])
 
         # Summary router metrics
         router_states = {}
@@ -788,7 +1165,8 @@ class SimulationEngine:
                     "fib_size": len(node["fib"]),
                     "pit": node["pit"][-10:],
                     "cs": node["cs"][-10:],
-                    "fib": node["fib"]
+                    "fib": node["fib"],
+                    "poisoned_count": sum(1 for e in node["cs"] if e.get("is_synthetic"))
                 }
 
         # Lightweight traces: strip heavy nested breakdown trees except latest 3 to keep websocket payloads tiny and fast
@@ -798,14 +1176,18 @@ class SimulationEngine:
             entry = {
                 "id": t["id"],
                 "name": t["name"],
+                "category": t.get("category"),
+                "dst": t["dst"],
                 "time": t["time"],
                 "src": t["src"],
                 "path": t["path"],
                 "cache_hit": t["cache_hit"],
                 "cache_node": t["cache_node"],
+                "served_synthetic": t["served_synthetic"],
                 "is_watchlisted": t["is_watchlisted"],
                 "observed_by_attacker": t["observed_by_attacker"],
                 "observed_as": t["observed_as"],
+                "scheme": t["scheme"],
                 "pes": t["pes"],
                 "risk": t["risk"],
                 "risk_level": t["risk_level"],
@@ -814,8 +1196,10 @@ class SimulationEngine:
                 "decision": t["decision"],
                 "key_size": t["key_size"],
                 "latency_ms": t["latency_ms"],
-                "conf_on": t["conf_on"],
-                "conf_off": t["conf_off"]
+                "conf_normal": t["conf_normal"],
+                "conf_attack": t["conf_attack"],
+                "conf_static_crypto": t["conf_static_crypto"],
+                "conf_wasp": t["conf_wasp"]
             }
             if i >= len(recent_subset) - 3:
                 entry["breakdown"] = t.get("breakdown")
@@ -828,17 +1212,36 @@ class SimulationEngine:
             "status": self.status,
             "sim_time": round(self.sim_time, 2),
             "packet_count": self.packet_counter,
-            "world_mode": self.world_mode,
+            "scheme": self.scheme,
             "config": self.config,
             "topology": {
-                "nodes": [{"id": nid, "type": n["type"], "is_compromised": n.get("is_compromised", False)} for nid, n in self.nodes.items()],
-                "edges": self.edges
+                "nodes": [
+                    {
+                        "id": nid,
+                        "type": n["type"],
+                        "is_compromised": n.get("is_compromised", False),
+                        "category": n.get("category"),
+                        "label": n.get("label")
+                    }
+                    for nid, n in self.nodes.items()
+                ],
+                "edges": self.edges,
+                "pattern": self.config["topology"].get("pattern", "linear")
             },
             "routers": router_states,
             "active_packets": self.active_packets,
             "recent_traces": light_traces,
             "latest_trace": latest_trace,
             "watchlist": watchlist_stats,
+            "content_sample": content_sample,
+            "poison_log": self.poison_log[-20:],
+            "scan_log": self.scan_log[-20:],
+            "gan_source_model": GAN_SOURCE_MODEL,
+            "anti_gan": {
+                "available": ANTI_GAN_AVAILABLE,
+                "mitigation_enabled": self.config["anti_gan"]["mitigation_enabled"],
+                "threshold": self.config["anti_gan"]["threshold"]
+            },
             "metrics": self.metrics_history[-25:],
             "paper_reference": self.paper_reference
         }
@@ -912,6 +1315,10 @@ app = FastAPI(title="WASP Network Lab Controller", version="0.1.0", lifespan=lif
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
 
+CONTENT_DIR = SERVER_DIR / "content"
+if CONTENT_DIR.exists():
+    app.mount("/content", StaticFiles(directory=str(CONTENT_DIR)), name="content")
+
 
 
 # WebSocket Endpoint (/ws)
@@ -937,7 +1344,7 @@ async def websocket_endpoint(websocket: WebSocket):
                 elif action == "resume":
                     engine.status = "RUNNING"
                 elif action == "stop":
-                    engine.status = "STOPPED"
+                    engine.reset_simulation()
                 elif action == "step":
                     prev = engine.status
                     engine.status = "RUNNING"
@@ -947,21 +1354,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     t_seed = msg.get("traffic_seed", 42)
                     w_seed = msg.get("wasp_seed", 1337)
                     engine.reseed(t_seed, w_seed)
-                elif action == "set_world":
-                    engine.world_mode = msg.get("world", "BOTH")
-                elif action == "toggle_wasp":
-                    current = engine.world_mode == "ON"
-                    engine.world_mode = "OFF" if current else "ON"
-                    for nid, n in engine.nodes.items():
-                        if n["type"] == "router":
-                            n["wasp_enabled"] = not current
+                elif action == "set_scheme":
+                    engine.apply_scheme(msg.get("scheme", "WASP"))
                 elif action == "set_ablation":
                     mech = msg.get("mechanism")
                     val = bool(msg.get("enabled", True))
                     if mech in engine.config["ablation"]:
                         engine.config["ablation"][mech] = val
                 elif action == "inject":
-                    name = msg.get("name", "/c/1")
+                    name = msg.get("name", "/cats/cat_image1.jpg")
                     cid = msg.get("consumer_id", "s0")
                     engine.process_interest(name, cid, synthetic=True)
 
@@ -978,19 +1379,25 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 
+# Browsers can silently serve a stale cached copy of these on a plain
+# refresh since FileResponse sets no cache headers by default -- during
+# active iteration on the dashboard that reads as "refresh does nothing."
+NO_CACHE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate", "Pragma": "no-cache"}
+
+
 # HTML View Page Routes
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
     index_file = WEB_DIR / "index.html"
     if index_file.exists():
-        return FileResponse(index_file)
+        return FileResponse(index_file, headers=NO_CACHE_HEADERS)
     return HTMLResponse("<h1>WASP Lab Dashboard</h1><p>index.html not found</p>")
 
 @app.get("/network", response_class=HTMLResponse)
 async def get_network():
     network_file = WEB_DIR / "network.html"
     if network_file.exists():
-        return FileResponse(network_file)
+        return FileResponse(network_file, headers=NO_CACHE_HEADERS)
     return HTMLResponse("<h1>WASP Lab Network Mode</h1><p>network.html not found</p>")
 
 @app.get("/router", response_class=HTMLResponse)
@@ -998,8 +1405,22 @@ async def get_network():
 async def get_router(router_id: str = "r0"):
     router_file = WEB_DIR / "router.html"
     if router_file.exists():
-        return FileResponse(router_file)
+        return FileResponse(router_file, headers=NO_CACHE_HEADERS)
     return HTMLResponse("<h1>WASP Lab Router Mode</h1><p>router.html not found</p>")
+
+@app.get("/gan-comparison", response_class=HTMLResponse)
+async def get_gan_comparison():
+    gan_file = WEB_DIR / "gan_comparison.html"
+    if gan_file.exists():
+        return FileResponse(gan_file, headers=NO_CACHE_HEADERS)
+    return HTMLResponse("<h1>GAN Comparison</h1><p>gan_comparison.html not found</p>")
+
+@app.get("/mesh-poisoning", response_class=HTMLResponse)
+async def get_mesh_poisoning():
+    poison_file = WEB_DIR / "mesh_poisoning.html"
+    if poison_file.exists():
+        return FileResponse(poison_file, headers=NO_CACHE_HEADERS)
+    return HTMLResponse("<h1>Mesh Poisoning</h1><p>mesh_poisoning.html not found</p>")
 
 
 # Fallback direct routes for CSS and JS
@@ -1007,14 +1428,14 @@ async def get_router(router_id: str = "r0"):
 async def get_styles():
     f = WEB_DIR / "styles.css"
     if f.exists():
-        return FileResponse(f, media_type="text/css")
+        return FileResponse(f, media_type="text/css", headers=NO_CACHE_HEADERS)
     raise HTTPException(status_code=404, detail="styles.css not found")
 
 @app.get("/app.js")
 async def get_app_js():
     f = WEB_DIR / "app.js"
     if f.exists():
-        return FileResponse(f, media_type="application/javascript")
+        return FileResponse(f, media_type="application/javascript", headers=NO_CACHE_HEADERS)
     raise HTTPException(status_code=404, detail="app.js not found")
 
 
@@ -1024,6 +1445,7 @@ def get_status():
     return {
         "status": engine.status,
         "scenario": "FULL_WASP",
+        "scheme": engine.scheme,
         "time": round(engine.sim_time, 2)
     }
 
@@ -1034,7 +1456,7 @@ def start_simulation(config: Optional[ScenarioConfig] = None):
 
 @app.post("/stop")
 def stop_simulation():
-    engine.status = "STOPPED"
+    engine.reset_simulation()
     return {"status": "stopped"}
 
 @app.post("/pause")
@@ -1069,6 +1491,7 @@ def init_network(config: NetworkInit):
     engine.config["topology"]["link_latency_ms"] = config.link_latency_ms
     engine.config["topology"]["cs_capacity"] = config.cs_capacity
     engine.init_topology()
+    engine.reset_posteriors()  # watchlist/content pool changed, rebuild posterior banks to match
     return {"status": "initialized", "topology": engine.config["topology"]}
 
 
@@ -1077,7 +1500,10 @@ def update_traffic_config(cfg: TrafficConfig):
     engine.config["traffic"]["zipf_alpha"] = max(1.01, cfg.zipf_alpha)
     engine.config["traffic"]["catalog_size"] = max(10, cfg.catalog_size)
     engine.config["traffic"]["mean_inter_arrival_ms"] = max(5.0, cfg.mean_inter_arrival_ms)
-    engine.config["traffic"]["watchlist_size"] = max(1, cfg.watchlist_size)
+    if max(1, cfg.watchlist_size) != engine.config["traffic"]["watchlist_size"]:
+        engine.config["traffic"]["watchlist_size"] = max(1, cfg.watchlist_size)
+        engine.rebuild_watchlist()
+        engine.reset_posteriors()
     if cfg.obs_router and cfg.obs_router in engine.nodes:
         engine.config["attacker"]["observation_routers"] = [cfg.obs_router]
         for nid, node in engine.nodes.items():
@@ -1088,34 +1514,21 @@ def update_traffic_config(cfg: TrafficConfig):
         engine.reset_posteriors()
     return {"status": "updated", "traffic": engine.config["traffic"], "attacker": engine.config["attacker"]}
 
-class SetWorldConfig(BaseModel):
-    world: str
-
-@app.post("/wasp/set_world")
-def set_world(cfg: SetWorldConfig):
-    engine.world_mode = cfg.world.upper()
-    return {"status": "set", "world": engine.world_mode}
-
-@app.post("/network/toggle_wasp")
-def toggle_wasp():
-    current = engine.world_mode == "ON"
-    new_state = not current
-    engine.world_mode = "ON" if new_state else "OFF"
-    for nid, node in engine.nodes.items():
-        if node["type"] == "router":
-            node["wasp_enabled"] = new_state
-    return {"status": "toggled", "wasp_enabled": new_state, "world_mode": engine.world_mode}
+@app.post("/scheme/set")
+def set_scheme(cfg: SchemeConfig):
+    engine.apply_scheme(cfg.scheme)
+    return {"status": "set", "scheme": engine.scheme}
 
 @app.get("/network/state")
 def get_network_state():
     recent = engine.trace_log[-5:] if engine.trace_log else []
     active_links = list(set([t["path"][1] for t in recent if len(t["path"]) > 1]))
-    wasp_enabled = engine.world_mode in ["ON", "BOTH"]
+    wasp_enabled = engine.scheme in ("STATIC_CRYPTO", "WASP")
     return {
         "num_routers": engine.config["topology"]["n_routers"],
         "num_consumers": engine.config["topology"]["n_subscribers"],
         "wasp_enabled": wasp_enabled,
-        "world_mode": engine.world_mode,
+        "scheme": engine.scheme,
         "total_packets": engine.packet_counter,
         "threat_level": "HIGH" if any(t["risk_level"] == "High" for t in recent) else "LOW",
         "active_links": active_links
@@ -1129,7 +1542,7 @@ def get_topology():
 @app.get("/network/visualizer_state")
 def get_visualizer_state():
     conf_map = {}
-    for name, (a, b) in engine.posteriors_on.items():
+    for name, (a, b) in engine.posteriors[engine.scheme].items():
         conf_map[name] = round(a / max(1e-6, a + b), 3)
 
     routers = {}
@@ -1158,13 +1571,15 @@ def get_visualizer_state():
 @app.get("/node/{node_id}")
 def get_node_state(node_id: str):
     if node_id == "ATTACKER":
+        active_bank = engine.posteriors[engine.scheme]
         mean_leakage = np.mean([
-            a / max(1e-6, a + b) for a, b in engine.posteriors_on.values()
-        ]) if engine.posteriors_on else 0.1
-        conf_map = {k: round(a / max(1e-6, a + b), 3) for k, (a, b) in engine.posteriors_on.items()}
+            a / max(1e-6, a + b) for a, b in active_bank.values()
+        ]) if active_bank else 0.1
+        conf_map = {k: round(a / max(1e-6, a + b), 3) for k, (a, b) in active_bank.items()}
         return {
             "type": "attacker",
-            "observations": sum(int(a) for a, b in engine.posteriors_on.values()),
+            "scheme": engine.scheme,
+            "observations": sum(int(a) for a, b in active_bank.values()),
             "leakage": round(float(mean_leakage), 3),
             "watchlist": sorted(list(engine.watchlist)),
             "inferred": conf_map
@@ -1232,11 +1647,86 @@ def inject_traffic(config: InjectConfig):
 def add_watchlist(target: AttackerTarget):
     engine.watchlist.add(target.target)
     prior = engine.config["attacker"]["confidence_prior"]
-    if target.target not in engine.posteriors_on:
-        engine.posteriors_on[target.target] = [prior * 10.0, (1.0 - prior) * 10.0]
-    if target.target not in engine.posteriors_off:
-        engine.posteriors_off[target.target] = [prior * 10.0, (1.0 - prior) * 10.0]
+    for s in SCHEMES:
+        if target.target not in engine.posteriors[s]:
+            engine.posteriors[s][target.target] = [prior * 10.0, (1.0 - prior) * 10.0]
     return {"status": "added", "watchlist": sorted(list(engine.watchlist))}
+
+# Default source of GAN-generated fake images for cache poisoning: WGAN-GP
+# was selected as the deployed generator (tied-best FID with DCGAN, but the
+# stronger theoretical guarantee against mode collapse -- see gan-comparison
+# page). Images pre-generated via gan_lab/generate.py --model wgan_gp.
+GAN_SOURCE_MODEL = "wgan_gp"
+FAKE_CONTENT_DIR = SERVER_DIR / "content" / f"fake_{GAN_SOURCE_MODEL}"
+
+@app.post("/attack/poison_cache")
+def poison_cache_endpoint(cfg: PoisonConfig):
+    source_dir = Path(cfg.source_dir) if cfg.source_dir else FAKE_CONTENT_DIR
+    if not source_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"No generated images found at {source_dir}. Run gan_lab/generate.py first."
+        )
+    image_files = sorted(
+        f.name for f in source_dir.iterdir()
+        if f.suffix.lower() in {".png", ".jpg", ".jpeg"}
+    )
+    if not image_files:
+        raise HTTPException(status_code=404, detail=f"{source_dir} has no generated images.")
+
+    if cfg.target_names:
+        target_names = cfg.target_names
+    else:
+        # Default to poisoning watchlisted content specifically -- the same
+        # content WASP's privacy pipeline is trying to protect, now shown
+        # vulnerable on the authenticity axis instead.
+        candidates = [n for n in engine.watchlist if not cfg.category or n.startswith(f"/{cfg.category}/")]
+        if not candidates and cfg.category:
+            candidates = engine.content_pool.get(cfg.category, [])
+        if not candidates:
+            raise HTTPException(
+                status_code=400,
+                detail="No target content names available -- pass target_names explicitly or a valid category."
+            )
+        target_names = candidates[:max(1, cfg.count)]
+
+    chosen_images = [image_files[i % len(image_files)] for i in range(len(target_names))]
+    poisoned = engine.poison_cache(cfg.router_id, target_names, chosen_images)
+    return {"status": "poisoned", "router_id": cfg.router_id, "poisoned": poisoned}
+
+@app.get("/attack/poison_log")
+def get_poison_log():
+    return {"log": engine.poison_log[-30:]}
+
+@app.post("/attack/scan_router")
+def scan_router(cfg: ScanConfig):
+    if not ANTI_GAN_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail="Anti-GAN detector not trained yet -- run gan_lab/anti_gan_train.py first."
+        )
+    try:
+        results = engine.scan_router_cache(cfg.router_id, cfg.mitigate)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return {"status": "scanned", "router_id": cfg.router_id, "results": results}
+
+@app.get("/attack/scan_log")
+def get_scan_log():
+    return {"log": engine.scan_log[-30:]}
+
+@app.post("/attack/set_mitigation")
+def set_mitigation(cfg: MitigationConfig):
+    engine.config["anti_gan"]["mitigation_enabled"] = cfg.enabled
+    return {"status": "updated", "mitigation_enabled": cfg.enabled}
+
+@app.get("/attack/anti_gan_status")
+def get_anti_gan_status():
+    return {
+        "available": ANTI_GAN_AVAILABLE,
+        "mitigation_enabled": engine.config["anti_gan"]["mitigation_enabled"],
+        "threshold": engine.config["anti_gan"]["threshold"]
+    }
 
 @app.post("/wasp/params")
 def update_params(params: WaspParams):
@@ -1279,41 +1769,40 @@ def get_api_state():
 
 @app.get("/api/report")
 def get_report():
-    recent = engine.trace_log[-50:] if engine.trace_log else []
-    mean_conf_on = np.mean([
-        a / max(1e-6, a + b) for a, b in engine.posteriors_on.values()
-    ]) if engine.posteriors_on else 0.1
-    mean_conf_off = np.mean([
-        a / max(1e-6, a + b) for a, b in engine.posteriors_off.values()
-    ]) if engine.posteriors_off else 0.1
+    mean_conf = {}
+    for s in SCHEMES:
+        bank = engine.posteriors[s]
+        mean_conf[s] = float(np.mean([a / max(1e-6, a + b) for a, b in bank.values()])) if bank else 0.1
+
+    pdr_reference = {"NORMAL": 0.98, "ATTACK": 0.65, "STATIC_CRYPTO": 0.87, "WASP": 0.94}
 
     report_content = f"""# WASP Network Security Simulation Report
 
 ## Run Metadata
 - Run Time: {engine.sim_time:.2f} s
 - Total Packets Processed: {engine.packet_counter}
-- World Mode: {engine.world_mode}
+- Active Scheme: {engine.scheme}
 - Seeds: Traffic={engine.config['seeds']['traffic']}, WASP={engine.config['seeds']['wasp']}
 
-## Evaluation Metrics vs Paper References
+## Evaluation Metrics vs Paper References (Lal & Malani, Fig. 3-4)
 
-| Metric | WASP ON | WASP OFF | Paper Reference | Status |
+| Metric | Normal (A) | Attack / Unshielded (C) | Static Crypto (B) | Full WASP (D) |
 |---|---|---|---|---|
-| Attacker Mean Confidence | {mean_conf_on:.3f} | {mean_conf_off:.3f} | 0.180 (WASP) / 0.850 (Unshielded) | [OK] Strong Suppression |
-| Packet Delivery Ratio (PDR) | 0.940 | 0.960 | 0.940 (WASP) / 0.870 (Static Crypto) | [OK] Within bounds |
-| Cache Hit Ratio (CHR) | 0.350 | 0.350 | 0.350 | [OK] Matching baseline |
-| Hit Latency | 5.0 ms | 5.0 ms | 5.0 ms | [OK] Short-circuit verified |
-| Miss Latency | 27.5 ms | 20.0 ms | 28.0 ms | [OK] Crypto/delay overhead accounted |
-| Shielding Overhead (O_s) | 0.120 | 0.000 | 0.120 | [OK] Exact match |
-| Cryptographic Overhead (O_c) | 0.080 | 0.000 | 0.080 | [OK] Exact match |
+| Attacker Mean Confidence | {mean_conf['NORMAL']:.3f} | {mean_conf['ATTACK']:.3f} | {mean_conf['STATIC_CRYPTO']:.3f} | {mean_conf['WASP']:.3f} |
+| Packet Delivery Ratio (PDR, paper ref.) | {pdr_reference['NORMAL']:.3f} | {pdr_reference['ATTACK']:.3f} | {pdr_reference['STATIC_CRYPTO']:.3f} | {pdr_reference['WASP']:.3f} |
 
-## Active Shielding Mechanisms
+Currently running scheme: **{engine.scheme}**. Switch schemes via POST /scheme/set to accumulate comparable confidence data for the other three.
+
+## Active Shielding Mechanisms (apply only while scheme = WASP)
 - A-SHLD-1 Name Obfuscation: {"ENABLED" if engine.config['ablation']['name_obfuscation'] else "DISABLED"}
 - A-SHLD-2 Timing Decorrelation: {"ENABLED" if engine.config['ablation']['timing_decorrelation'] else "DISABLED"}
 - A-SHLD-3 Routing Diversity: {"ENABLED" if engine.config['ablation']['routing_diversity'] else "DISABLED"}
 
-## Deviations from Paper
-No synthetic deviations. All mathematical equations strictly follow Algorithm 1 (TM -> PE -> ASC -> DCP -> SF) and Equations 1-48 from Lal & Malani.
+## Scheme Definitions
+- **Normal (A)**: no watchlist adversary present; unshielded baseline ICN.
+- **Attack / Unshielded (C)**: watchlist adversary active, zero defense, plaintext names.
+- **Static Crypto (B)**: adversary active, every Interest encrypted at a fixed key size ({engine.config['static_crypto']['key_size']} bits), no adaptive timing/routing cover.
+- **Full WASP (D)**: adversary active, adaptive Traffic Monitoring -> Privacy Exposure -> Shielding Control -> Dynamic Crypto -> Secure Forwarding pipeline (Algorithm 1, Eqs. 1-48).
 """
     return Response(content=report_content, media_type="text/markdown")
 

@@ -33,7 +33,7 @@ class WaspREPL(cmd.Cmd):
         "       WASP Network Lab - Interactive Terminal Client\n"
         "===========================================================\n"
         "Commands:\n"
-        "  status, start, stop, pause, resume, step, toggle, topology\n"
+        "  status, start, stop, pause, resume, step, scheme <name>, topology\n"
         "  router <id>, node <id>, inject <name>, events, report, help, exit\n"
     )
     prompt = "wasp/network> "
@@ -53,7 +53,7 @@ class WaspREPL(cmd.Cmd):
         """Get simulation status and elapsed clock: status"""
         data = api_get("/status")
         if data:
-            print(f"Engine Status : {data.get('status')}\nSimulated Time: {data.get('time', 0):.2f}s\nWorld Mode    : {data.get('world_mode', 'ON')}")
+            print(f"Engine Status : {data.get('status')}\nSimulated Time: {data.get('time', 0):.2f}s\nActive Scheme : {data.get('scheme', '?')}")
             
     def do_start(self, arg):
         """Start simulation: start"""
@@ -85,11 +85,24 @@ class WaspREPL(cmd.Cmd):
         if res:
             print(f"[Engine] Stepped. Time: {res.get('time', 0):.2f}s")
             
-    def do_toggle(self, arg):
-        """Toggle WASP shield ON/OFF: toggle"""
-        res = api_post("/network/toggle_wasp")
+    SCHEMES = ["NORMAL", "ATTACK", "STATIC_CRYPTO", "WASP"]
+
+    def do_scheme(self, arg):
+        """Set the active scheme: scheme <NORMAL|ATTACK|STATIC_CRYPTO|WASP>"""
+        name = arg.strip().upper()
+        if name not in self.SCHEMES:
+            print(f"Usage: scheme <{'|'.join(self.SCHEMES)}>")
+            return
+        res = api_post("/scheme/set", {"scheme": name})
         if res:
-            print(f"[Engine] WASP Toggled: Enabled = {res.get('wasp_enabled')}, Mode = {res.get('world_mode')}")
+            print(f"[Engine] Active scheme set to {res.get('scheme')}")
+
+    def do_toggle(self, arg):
+        """Cycle to the next scheme (NORMAL -> ATTACK -> STATIC_CRYPTO -> WASP -> ...): toggle"""
+        status = api_get("/status")
+        current = status.get("scheme", "WASP") if status else "WASP"
+        next_scheme = self.SCHEMES[(self.SCHEMES.index(current) + 1) % len(self.SCHEMES)] if current in self.SCHEMES else "WASP"
+        self.do_scheme(next_scheme)
 
     def do_topology(self, arg):
         """Display current network topology: topology"""
@@ -101,7 +114,7 @@ class WaspREPL(cmd.Cmd):
             for n in data.get("nodes", []):
                 nid = n.get("id")
                 ntype = n.get("type")
-                details = f"Compromised={n.get('compromised', False)}" if ntype == "router" else ""
+                details = f"Compromised={n.get('is_compromised', False)}" if ntype == "router" else ""
                 print(f"| {nid:<14} | {ntype:<10} | {details:<34} |")
             print("+----------------+------------------------------------------------+")
 
@@ -113,14 +126,17 @@ class WaspREPL(cmd.Cmd):
             print(json.dumps(data, indent=2))
 
     def do_inject(self, arg):
-        """Inject an Interest packet: inject [content_name] [consumer_id] (default: /c/1 s0)"""
+        """Inject an Interest packet: inject [content_name] [consumer_id] (default: /cats/cat_image1.jpg s0)"""
         parts = arg.strip().split()
-        name = parts[0] if len(parts) > 0 and parts[0] else "/c/1"
+        name = parts[0] if len(parts) > 0 and parts[0] else "/cats/cat_image1.jpg"
         consumer_id = parts[1] if len(parts) > 1 else "s0"
         res = api_post("/inject", {"consumer_id": consumer_id, "name": name})
         if res:
             trace = res.get("trace", {})
-            print(f"[Injected] {name} from {consumer_id}\nOutcome : {trace.get('outcome')}\nHops    : {trace.get('hops')}\nShield  : {trace.get('shielded')}\nLatency : {trace.get('latency_ms', 0):.2f} ms")
+            path = trace.get("path", [])
+            hops = max(0, len(path) - 1)
+            shielded = trace.get("decision") == 1
+            print(f"[Injected] {name} from {consumer_id}\nCache   : {'HIT at ' + trace.get('cache_node') if trace.get('cache_hit') else 'MISS'}\nHops    : {hops}\nMode    : {trace.get('mode')}\nShield  : {shielded}\nLatency : {trace.get('latency_ms', 0):.2f} ms")
 
     def do_events(self, arg):
         """Show recent simulation events: events"""
@@ -128,7 +144,8 @@ class WaspREPL(cmd.Cmd):
         if data:
             events = data.get("events", [])[-10:]
             for ev in events:
-                print(f"[{ev.get('time', 0):.2f}s] {ev.get('type')} {ev.get('name')}: {ev.get('outcome')} ({ev.get('latency_ms', 0):.1f}ms)")
+                dec = ev.get("decision", {})
+                print(f"{ev.get('interest_id')} {ev.get('interest')} @ {ev.get('router_id')}: mode={dec.get('mode')} risk={dec.get('risk'):.3f} delay={dec.get('delay', 0):.1f}ms")
 
     def do_report(self, arg):
         """Display simulation metrics report: report"""
