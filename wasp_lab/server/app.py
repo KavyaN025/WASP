@@ -801,27 +801,43 @@ class SimulationEngine:
         obs_routers = self.config["attacker"]["observation_routers"]
         observed_by_attacker = any(r in route_nodes for r in obs_routers)
 
-        # NORMAL has no watchlist adversary present at all (paper's unattacked baseline)
+        # Parallel tracking: every observed watchlisted Interest updates ALL
+        # FOUR schemes' posterior banks simultaneously, each using its own
+        # decision+suppression math applied to this exact request -- not
+        # just whichever scheme is currently "live" for routing/animation.
+        # This is what makes the comparison strip genuinely real-time
+        # instead of only the selected column moving while the other three
+        # sit frozen at whatever they last were. NORMAL is excluded: it has
+        # no adversary modeled at all, by design, forever.
         observed_name = content_name
-        if observed_by_attacker and is_watchlisted and scheme != "NORMAL":
-            bank = self.posteriors[scheme]
-            a, b = bank[content_name]
-            if scheme == "WASP" and decision == 1 and ablation["name_obfuscation"]:
-                # A-SHLD-1: Name Obfuscation into Opaque Token; confidence decays via Eq. 48
-                token_hash = hashlib.sha256(content_name.encode()).hexdigest()[:8]
-                observed_name = f"OPAQUE_{token_hash}"
-                suppression = max(0.0, 1.0 - S_i)
-                bank[content_name] = [a * suppression, b + (1.0 - suppression)]
-            elif scheme == "STATIC_CRYPTO":
-                # Conventional crypto hides the name behind a fixed-strength token, but
-                # without adaptive timing/routing cover it still leaks via side channels
-                token_hash = hashlib.sha256(content_name.encode()).hexdigest()[:8]
-                observed_name = f"ENC_{token_hash}"
-                suppression = static_cfg["suppression"]
-                bank[content_name] = [a * suppression, b + (1.0 - suppression)]
-            else:
-                # ATTACK (and WASP when the adaptive decision is 0): plaintext observation
-                bank[content_name][0] += 1.0
+        if observed_by_attacker and is_watchlisted:
+            for s in SCHEMES:
+                if s == "NORMAL":
+                    continue
+                bank = self.posteriors[s]
+                a, b = bank[content_name]
+
+                if s == "WASP":
+                    s_decision = adaptive_decision
+                    s_suppress = (max(0.0, 1.0 - S_i)
+                                  if (s_decision == 1 and ablation["name_obfuscation"]) else None)
+                elif s == "STATIC_CRYPTO":
+                    s_decision = 1
+                    s_suppress = static_cfg["suppression"]
+                else:  # ATTACK
+                    s_decision = 0
+                    s_suppress = None
+
+                if s_suppress is not None:
+                    bank[content_name] = [a * s_suppress, b + (1.0 - s_suppress)]
+                else:
+                    bank[content_name][0] += 1.0
+
+                if s == scheme and s_suppress is not None:
+                    # Only the currently-active scheme's observed name feeds
+                    # the live trace/packet display.
+                    token_hash = hashlib.sha256(content_name.encode()).hexdigest()[:8]
+                    observed_name = f"OPAQUE_{token_hash}" if s == "WASP" else f"ENC_{token_hash}"
 
         # Posterior confidence for this content under every scheme (for comparison charts)
         if is_watchlisted:
@@ -1091,8 +1107,12 @@ class SimulationEngine:
         total_misses = sum(self.nodes[f"r{i}"]["cache_misses"] for i in range(self.config["topology"]["n_routers"]))
         chr = float(total_hits / max(1, total_hits + total_misses))
 
-        # Overheads
-        recent_s = [t["shielding_intensity"] for t in recent_traces]
+        # Overheads -- S_i is computed for every packet regardless of scheme
+        # (needed for the formula-breakdown display), but only counts as real
+        # "overhead" when the active scheme actually acted on it (decision=1).
+        # NORMAL/ATTACK always force decision=0, so their overhead is
+        # genuinely zero, not just an unused risk score.
+        recent_s = [t["shielding_intensity"] if t["decision"] == 1 else 0.0 for t in recent_traces]
         E_s = float(np.mean(recent_s)) if recent_s else 0.0
         O_s = E_s * 0.2
         recent_oc = [t["breakdown"]["stage4_dcp"]["O_c"]["val"] for t in recent_traces]
